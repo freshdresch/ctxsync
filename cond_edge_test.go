@@ -36,6 +36,19 @@ func receiveResult(results <-chan error) error {
 	}
 }
 
+// receiveRecovered returns the next value from recovered and true, or nil and false if none
+// arrives before boundedWaitTimeout.
+func receiveRecovered(recovered <-chan any) (any, bool) {
+	timer := time.NewTimer(boundedWaitTimeout)
+	defer timer.Stop()
+	select {
+	case value := <-recovered:
+		return value, true
+	case <-timer.C:
+		return nil, false
+	}
+}
+
 // TestCondHappensBefore hands a plain int from a writer to a waiter through the Cond, so the race
 // detector reports the read if the wakeup gives no happens-before edge. The writer never touches
 // L, so no edge through L can hide a missing one. The waiter holds L throughout, closes started
@@ -330,6 +343,11 @@ func (fl *faultyLocker) Unlock() {
 	}
 }
 
+// TryLock takes the lock without blocking and reports whether it did. It never fails.
+func (fl *faultyLocker) TryLock() bool {
+	return fl.lock.TryLock()
+}
+
 // startRecoveringWaiter starts a goroutine that locks c.L and calls c.Wait(ctx), for a Wait that
 // is expected to panic. The goroutine never unlocks c.L, because the failing locker call leaves
 // c.L unlocked. Its only deferred call recovers the panic and sends the recovered value on the
@@ -374,7 +392,7 @@ func assertLaterWaiterSignaled(t *testing.T, c *Cond) {
 
 	c.Signal()
 	synctest.Wait()
-	assertWaitResult(t, results, cancel, nil)
+	assertCondWaitResult(t, c, results, cancel, nil)
 }
 
 // panickyDoneContext is a context whose Done method panics with donePanic.
@@ -389,24 +407,40 @@ func (panickyDoneContext) Done() <-chan struct{} {
 }
 
 func TestCondAbnormalExit(t *testing.T) {
+	// UnlockPanics runs outside synctest and bounds every wait. A Wait that holds the internal
+	// mutex when Unlock panics leaves its own cleanup blocked on that mutex, which is not durably
+	// blocked, so synctest.Wait would hang instead of the test failing.
 	t.Run("UnlockPanics", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			ctxA, cancelA := context.WithCancel(t.Context())
-			defer cancelA()
-			locker := &faultyLocker{
-				lock:   make(chanLock, 1),
-				failOn: callUnlock,
-				fail:   panicFromLocker,
-			}
-			locker.armed.Store(true)
-			cond := NewCond(locker)
+		ctxA, cancelA := context.WithCancel(t.Context())
+		defer cancelA()
+		locker := &faultyLocker{
+			lock:   make(chanLock, 1),
+			failOn: callUnlock,
+			fail:   panicFromLocker,
+		}
+		locker.armed.Store(true)
+		cond := NewCond(locker)
 
-			recovered := startRecoveringWaiter(ctxA, cond)
-			synctest.Wait()
-			assertRecovered(t, recovered, cancelA)
-			assert.Equal(t, 0, queueLen(cond), "the panicking Wait left its record queued")
-			assertLaterWaiterSignaled(t, cond)
-		})
+		recovered := startRecoveringWaiter(ctxA, cond)
+		value, ok := receiveRecovered(recovered)
+		if ok {
+			assert.Equal(t, lockerPanic, value)
+		} else {
+			t.Error("Wait did not panic")
+			cancelA()
+			value, ok = receiveRecovered(recovered)
+			require.True(t, ok, "Wait did not return after cancel")
+			t.Logf("after cancel, the waiter recovered %v", value)
+		}
+		assert.Equal(t, 0, queueLen(cond), "the panicking Wait left its record queued")
+
+		ctxB, cancelB := context.WithCancel(t.Context())
+		defer cancelB()
+		resultsB := startWaiter(ctxB, cond)
+		require.True(t, waitForQueueLen(cond, 1),
+			"the later waiter did not join the queue, or the queue holds a record from an earlier Wait")
+		cond.Signal()
+		assert.NoError(t, receiveResult(resultsB), "a record from the panicking Wait took the Signal")
 	})
 
 	t.Run("LockPanics", func(t *testing.T) {
@@ -435,7 +469,7 @@ func TestCondAbnormalExit(t *testing.T) {
 			cond.Signal()
 			synctest.Wait()
 			assertRecovered(t, recovered, cancelA)
-			assertWaitResult(t, resultsB, cancelB, nil)
+			assertCondWaitResult(t, cond, resultsB, cancelB, nil)
 		})
 	})
 
@@ -480,7 +514,7 @@ func TestCondAbnormalExit(t *testing.T) {
 				cancelA()
 				<-exited
 			}
-			assertWaitResult(t, resultsB, cancelB, nil)
+			assertCondWaitResult(t, cond, resultsB, cancelB, nil)
 		})
 	})
 

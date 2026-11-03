@@ -44,13 +44,13 @@ func TestCondCancelWhileQueued(t *testing.T) {
 
 		cancelA()
 		synctest.Wait()
-		assertWaitResult(t, resultsA, cancelA, context.Canceled)
+		assertCondWaitResult(t, cond, resultsA, cancelA, context.Canceled)
 		assert.Empty(t, resultsB, "canceling A woke B")
 		assert.Equal(t, 1, queueLen(cond))
 
 		cond.Signal()
 		synctest.Wait()
-		assertWaitResult(t, resultsB, cancelB, nil)
+		assertCondWaitResult(t, cond, resultsB, cancelB, nil)
 	})
 }
 
@@ -72,8 +72,8 @@ func TestCondPassOn(t *testing.T) {
 		cond.wakeFrontLocked(wokenBySignal)
 		cond.mu.Unlock()
 		synctest.Wait()
-		assertWaitResult(t, resultsA, cancelA, context.Canceled)
-		assertWaitResult(t, resultsB, cancelB, nil)
+		assertCondWaitResult(t, cond, resultsA, cancelA, context.Canceled)
+		assertCondWaitResult(t, cond, resultsB, cancelB, nil)
 	})
 }
 
@@ -97,8 +97,8 @@ func TestCondRelockBeforeDeciding(t *testing.T) {
 		cancelA()
 		cond.L.Unlock()
 		synctest.Wait()
-		assertWaitResult(t, resultsA, cancelA, context.Canceled)
-		assertWaitResult(t, resultsB, cancelB, nil)
+		assertCondWaitResult(t, cond, resultsA, cancelA, context.Canceled)
+		assertCondWaitResult(t, cond, resultsB, cancelB, nil)
 	})
 }
 
@@ -159,7 +159,7 @@ func TestCondPassOnDropped(t *testing.T) {
 
 		cancel()
 		synctest.Wait()
-		assertWaitResult(t, results, cancel, context.Canceled)
+		assertCondWaitResult(t, cond, results, cancel, context.Canceled)
 	})
 }
 
@@ -183,7 +183,7 @@ func TestCondBroadcastPassesNothing(t *testing.T) {
 		cancel()
 		cond.L.Unlock()
 		synctest.Wait()
-		assertWaitResult(t, results, cancel, context.Canceled)
+		assertCondWaitResult(t, cond, results, cancel, context.Canceled)
 
 		cond.mu.Lock()
 		lateQueued, lateWoken := late.queued, late.woken
@@ -229,14 +229,16 @@ func TestCondPreCanceledTakesNoSignal(t *testing.T) {
 
 			cond.Signal()
 			synctest.Wait()
-			assertWaitResult(t, results, cancel, nil)
+			assertCondWaitResult(t, cond, results, cancel, nil)
 		})
 	})
 }
 
 // queueRecordingLocker is a chanLock whose Unlock records the length of cond's queue before it
-// releases the lock. queueLen takes the Cond's internal mutex, which Wait never holds while it
-// calls Unlock, so recording cannot deadlock.
+// releases the lock. It records heldQueueLen if the Cond's internal mutex is held at that point,
+// instead of blocking on it. A Wait that holds the mutex while it calls Unlock then fails the
+// test's check of the recorded lengths instead of deadlocking, which synctest cannot detect
+// because a goroutine blocked on a sync.Mutex is not durably blocked.
 type queueRecordingLocker struct {
 	lock chanLock
 	cond *Cond
@@ -249,12 +251,24 @@ func (ql *queueRecordingLocker) Lock() {
 	ql.lock.Lock()
 }
 
+// heldQueueLen is what queueRecordingLocker records when the Cond's internal mutex is held.
+const heldQueueLen = -1
+
 func (ql *queueRecordingLocker) Unlock() {
-	queued := queueLen(ql.cond)
+	queued := heldQueueLen
+	if ql.cond.mu.TryLock() {
+		queued = queueLenLocked(ql.cond)
+		ql.cond.mu.Unlock()
+	}
 	ql.mu.Lock()
 	ql.queueLens = append(ql.queueLens, queued)
 	ql.mu.Unlock()
 	ql.lock.Unlock()
+}
+
+// TryLock takes the lock without blocking and reports whether it did. It records nothing.
+func (ql *queueRecordingLocker) TryLock() bool {
+	return ql.lock.TryLock()
 }
 
 // recordedQueueLens returns a copy of the queue lengths recorded at each Unlock.
@@ -279,7 +293,7 @@ func TestCondJoinsBeforeUnlock(t *testing.T) {
 		synctest.Wait()
 		cancel()
 		synctest.Wait()
-		assertWaitResult(t, results, cancel, context.Canceled)
+		assertCondWaitResult(t, cond, results, cancel, context.Canceled)
 		assert.Equal(t, []int{1, 0}, locker.recordedQueueLens())
 	})
 }

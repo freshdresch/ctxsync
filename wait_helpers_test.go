@@ -64,3 +64,21 @@ func assertWaitResult(
 		t.Logf("after cancel, Wait returned %v", lateErr)
 	}
 }
+
+// assertCondWaitResult is assertWaitResult for a waiter in cond.Wait. If no result has arrived, it
+// also calls cond.Broadcast after canceling, so a Wait that ignores its context still returns and
+// the bubble does not deadlock.
+func assertCondWaitResult(
+	t *testing.T,
+	cond *Cond,
+	results <-chan error,
+	cancel context.CancelFunc,
+	expected error,
+) {
+	t.Helper()
+	cancelAndBroadcast := func() {
+		cancel()
+		cond.Broadcast()
+	}
+	assertWaitResult(t, results, cancelAndBroadcast, expected)
+}

@@ -2,6 +2,7 @@ package ctxsync
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 )
@@ -74,6 +75,11 @@ func (rl *recordingLocker) record(event string) {
 func queueLen(c *Cond) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return queueLenLocked(c)
+}
+
+// queueLenLocked returns the number of records in c's queue. The caller must hold c.mu.
+func queueLenLocked(c *Cond) int {
 	count := 0
 	for record := c.head; record != nil; record = record.next {
 		count++
@@ -81,14 +87,47 @@ func queueLen(c *Cond) int {
 	return count
 }
 
+// tryLocker is a sync.Locker that can also take the lock without blocking, as chanLock and
+// sync.Mutex can.
+type tryLocker interface {
+	sync.Locker
+	TryLock() bool
+}
+
+// tookUnheldLock reports whether locker, which the caller's Wait should have returned holding,
+// was free, so Wait returned without holding it. When it reports true, the caller holds locker,
+// because TryLock took it, and must release it. Releasing a lock the caller never held instead
+// would block forever on a chanLock and stop the process on a sync.Mutex. A locker without
+// TryLock is assumed held. The check cannot detect a Wait that returned without locker while
+// another goroutine holds it, because TryLock then fails, so the caller unlocks that goroutine's
+// lock.
+func tookUnheldLock(locker sync.Locker) bool {
+	trier, ok := locker.(tryLocker)
+	return ok && trier.TryLock()
+}
+
+// errReturnedUnheld is the error a test reports in place of waitErr when Wait returned without
+// holding L. It formats waitErr with %v, not %w, so a check for Wait's expected error cannot match
+// it.
+func errReturnedUnheld(waitErr error) error {
+	return fmt.Errorf("Wait returned %v without holding L", waitErr)
+}
+
 // startWaiter starts a goroutine that locks c.L, calls c.Wait(ctx), sends the result on the
 // returned channel, and then unlocks c.L. The channel has capacity 1, so the goroutine never
-// blocks on the send.
+// blocks on the send. If Wait returned without holding c.L, the goroutine sends an error in place
+// of Wait's result, as tookUnheldLock describes.
 func startWaiter(ctx context.Context, c *Cond) <-chan error {
 	results := make(chan error, 1)
 	go func() {
 		c.L.Lock()
-		results <- c.Wait(ctx)
+		err := c.Wait(ctx)
+		if tookUnheldLock(c.L) {
+			c.L.Unlock()
+			results <- errReturnedUnheld(err)
+			return
+		}
+		results <- err
 		c.L.Unlock()
 	}()
 	return results

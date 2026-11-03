@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 
@@ -49,12 +50,30 @@ func TestCondStressMixedBroadcast(t *testing.T) {
 	})
 }
 
+// stressLock is a chanLock whose Unlock of an unlocked lock counts the misuse instead of blocking.
+// After a wrong Wait returns without holding L, consumeTokens can find L held by another goroutine
+// and release that goroutine's lock. The other goroutine's own Unlock would then block forever
+// and deadlock the bubble, so it is counted and reported instead.
+type stressLock struct {
+	chanLock
+	unheldUnlocks atomic.Int64
+}
+
+func (sl *stressLock) Unlock() {
+	select {
+	case <-sl.chanLock:
+	default:
+		sl.unheldUnlocks.Add(1)
+	}
+}
+
 // runTokenStress runs one iteration of a lost-wakeup stress test. Producers add tokens, each
 // followed by a call to wake. Consumers take tokens, and a canceler cancels some consumers at
 // random points. Once the producers finish and every goroutine is blocked or done, no consumer may
 // be queued in Wait while tokens remain. It must run in a synctest bubble.
 func runTokenStress(t *testing.T, iteration int, wake func(*Cond)) {
-	cond := NewCond(make(chanLock, 1))
+	lock := &stressLock{chanLock: make(chanLock, 1)}
+	cond := NewCond(lock)
 	tokens := 0  // guarded by cond.L
 	waiting := 0 // consumers inside cond.Wait, guarded by cond.L
 	var producers, consumersAndCanceler sync.WaitGroup
@@ -105,24 +124,38 @@ func runTokenStress(t *testing.T, iteration int, wake func(*Cond)) {
 		)
 	}
 
+	// The Broadcast frees consumers that a wrong Wait leaves queued after their context ends, so
+	// the join below completes and the bubble does not deadlock. A correct Wait has already
+	// returned or returns ctx.Err() either way.
 	for _, cancel := range cancels {
 		cancel()
 	}
+	cond.Broadcast()
 	consumersAndCanceler.Wait()
+	assert.Zero(t, lock.unheldUnlocks.Load(), "iteration %d: Unlock of an unlocked L", iteration)
 }
 
 // consumeTokens takes tokens from *tokens, which cond.L guards, until Wait returns an error or ctx
 // ends after Wait returns nil. It returns Wait's error, or nil when it left after a nil result.
-// It keeps *waiting, which cond.L also guards, counting the consumers inside Wait.
+// It keeps *waiting, which cond.L also guards, counting the consumers inside Wait. If Wait
+// returned without holding cond.L, it returns an error in place of Wait's, as tookUnheldLock
+// describes.
 //
 // It checks ctx.Err() right after each nil Wait on purpose. A consumer that leaves at that point
 // without acting calls Signal, as the Cond docs advise.
 func consumeTokens(ctx context.Context, cond *Cond, tokens, waiting *int) error {
 	for {
 		cond.L.Lock()
-		for *tokens == 0 {
+		// The count goes negative only when a wrong Wait breaks mutual exclusion on cond.L. A
+		// consumer that kept taking tokens then would spin forever and hang the bubble.
+		for *tokens <= 0 {
 			*waiting++
 			err := cond.Wait(ctx)
+			if tookUnheldLock(cond.L) {
+				*waiting--
+				cond.L.Unlock()
+				return errReturnedUnheld(err)
+			}
 			*waiting--
 			if err != nil {
 				// No Signal here. A canceled Wait passes on a Signal it received, and calling

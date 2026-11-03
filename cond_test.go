@@ -36,11 +36,21 @@ func TestCondWaitPreCanceled(t *testing.T) {
 }
 
 func TestCondNilLocker(t *testing.T) {
+	// Wait runs on its own goroutine and the wait for it is bounded, so a Wait that deadlocks
+	// while the panic unwinds, for example on the internal mutex, fails the test instead of
+	// hanging the test binary.
 	t.Run("LiveContext", func(t *testing.T) {
 		var cond Cond
-		assert.Panics(t, func() {
+		recovered := make(chan any, 1)
+		go func() {
+			defer func() {
+				recovered <- recover()
+			}()
 			_ = cond.Wait(t.Context())
-		})
+		}()
+		value, ok := receiveRecovered(recovered)
+		require.True(t, ok, "Wait did not finish")
+		assert.NotNil(t, value, "Wait did not panic")
 	})
 
 	t.Run("CanceledContext", func(t *testing.T) {
@@ -67,17 +77,13 @@ func TestCondWaitDeadline(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), waitTimeout)
 		defer cancel()
 		cond := NewCond(make(chanLock, 1))
-		results := startWait(func() error {
-			cond.L.Lock()
-			defer cond.L.Unlock()
-			return cond.Wait(ctx)
-		})
+		results := startWaiter(ctx, cond)
 		synctest.Wait()
 		require.Empty(t, results, "Wait returned before the deadline")
 
 		time.Sleep(waitTimeout)
 		synctest.Wait()
-		assertWaitResult(t, results, cancel, context.DeadlineExceeded)
+		assertCondWaitResult(t, cond, results, cancel, context.DeadlineExceeded)
 	})
 }
 
@@ -113,7 +119,7 @@ func TestCondSignal(t *testing.T) {
 
 			cond.Broadcast()
 			synctest.Wait()
-			assertWaitResult(t, stillQueued, cancelStillQueued, nil)
+			assertCondWaitResult(t, cond, stillQueued, cancelStillQueued, nil)
 		})
 	})
 
@@ -135,7 +141,7 @@ func TestCondSignal(t *testing.T) {
 			cond.Broadcast()
 			synctest.Wait()
 			for i := range waiterCount {
-				assertWaitResult(t, results[i], cancels[i], nil)
+				assertCondWaitResult(t, cond, results[i], cancels[i], nil)
 			}
 		})
 	})
@@ -154,7 +160,7 @@ func TestCondSignal(t *testing.T) {
 
 			cancel()
 			synctest.Wait()
-			assertWaitResult(t, results, cancel, context.Canceled)
+			assertCondWaitResult(t, cond, results, cancel, context.Canceled)
 		})
 	})
 }
@@ -177,7 +183,7 @@ func TestCondSignalFIFO(t *testing.T) {
 		for i := range waiterCount {
 			cond.Signal()
 			synctest.Wait()
-			assertWaitResult(t, results[i], cancels[i], nil)
+			assertCondWaitResult(t, cond, results[i], cancels[i], nil)
 			for _, later := range results[i+1:] {
 				assert.Empty(t, later, "Signal %d woke a waiter that started later", i)
 			}
@@ -264,7 +270,7 @@ func TestCondCanceledHoldsLock(t *testing.T) {
 
 		cancel()
 		synctest.Wait()
-		assertWaitResult(t, results, cancel, context.Canceled)
+		assertCondWaitResult(t, cond, results, cancel, context.Canceled)
 		assert.False(t, lock.TryLock(), "Wait returned without holding L")
 
 		close(release)
@@ -287,20 +293,22 @@ func (sl *signalingLocker) Unlock() {
 	sl.cond.Signal()
 }
 
+// TryLock takes the lock without blocking and reports whether it did. It does not signal.
+func (sl *signalingLocker) TryLock() bool {
+	return sl.lock.TryLock()
+}
+
 // TestCondUnlockSignals checks that Wait joins the queue before it unlocks L and calls Unlock
 // without holding the internal mutex. The Signal inside Unlock then wakes the waiter's own record
-// instead of deadlocking.
+// instead of deadlocking. The test runs outside synctest because a Signal blocked on the internal
+// mutex is not durably blocked, so that deadlock would hang synctest.Wait instead of failing.
 func TestCondUnlockSignals(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		locker := &signalingLocker{lock: make(chanLock, 1)}
-		cond := NewCond(locker)
-		locker.cond = cond
+	locker := &signalingLocker{lock: make(chanLock, 1)}
+	cond := NewCond(locker)
+	locker.cond = cond
 
-		results := startWaiter(ctx, cond)
-		synctest.Wait()
-		assertWaitResult(t, results, cancel, nil)
-		assert.Equal(t, 0, queueLen(cond))
-	})
+	results := startWaiter(t.Context(), cond)
+	// queueLen takes the internal mutex, so it runs only after Wait returned.
+	require.NoError(t, receiveResult(results), "Wait deadlocked or failed")
+	assert.Equal(t, 0, queueLen(cond))
 }
