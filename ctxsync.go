@@ -36,6 +36,8 @@
 // synctest.Wait hangs and a leaked goroutine does not fail the bubble.
 package ctxsync
 
+import "sync"
+
 // NewLatch returns a [Latch] whose count starts at count. It panics if count is negative, because
 // a negative count is a bug in the caller.
 func NewLatch(count int) *Latch {
@@ -45,4 +47,9 @@ func NewLatch(count int) *Latch {
 	latch := &Latch{}
 	latch.count.Store(int64(count))
 	return latch
+}
+
+// NewCond returns a [Cond] whose L is locker, as [sync.NewCond] does.
+func NewCond(locker sync.Locker) *Cond {
+	return &Cond{L: locker}
 }

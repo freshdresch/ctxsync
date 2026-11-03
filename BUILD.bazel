@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "ctxsync",
     srcs = [
+        "cond.go",
         "ctxsync.go",
         "event.go",
         "gate.go",
@@ -16,6 +17,8 @@ go_library(
 go_test(
     name = "ctxsync_test",
     srcs = [
+        "cond_helpers_test.go",
+        "cond_test.go",
         "event_test.go",
         "gate_test.go",
         "iterations_test.go",
