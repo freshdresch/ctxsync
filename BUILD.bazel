@@ -19,6 +19,7 @@ go_test(
     srcs = [
         "cond_helpers_test.go",
         "cond_order_test.go",
+        "cond_stress_test.go",
         "cond_test.go",
         "event_test.go",
         "gate_test.go",
