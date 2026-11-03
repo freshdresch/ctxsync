@@ -93,3 +93,16 @@ func startWaiter(ctx context.Context, c *Cond) <-chan error {
 	}()
 	return results
 }
+
+// newRecord returns a waiter record with a fresh ready channel, for tests that build records
+// themselves.
+func newRecord() *waiter {
+	return &waiter{ready: make(chan struct{})}
+}
+
+// frontRecord returns the record at the front of c's queue, or nil if the queue is empty.
+func frontRecord(c *Cond) *waiter {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.head
+}
