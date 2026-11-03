@@ -1,13 +1,15 @@
 // Package ctxsync provides synchronization primitives whose waits take a [context.Context]:
-// Event, Gate, Latch, Cond, and Barrier.
+// [Event], [Gate], [Latch], [Cond], and [Barrier].
 //
 // Every wait panics if its context is nil. It checks before anything else, so the panic does
 // not depend on whether the wait would block. A caller that wants no cancellation passes
 // [context.Background].
 //
-// A wait returns nil when it has observed its outcome by the time it decides, and ctx.Err() when
-// the context has ended and it has not observed its outcome. A wait that reports cancellation
-// returns ctx.Err(), not context.Cause(ctx).
+// A wait returns nil when it has observed its outcome by the time it decides, [ErrBrokenBarrier]
+// when it waits on a broken Barrier, and ctx.Err() when the context has ended and it has not
+// observed its outcome. When a cancellation breaks a Barrier, both rules can apply, and the doc
+// of [Barrier.Await] says which of its parties returns ErrBrokenBarrier and which returns
+// ctx.Err(). A wait that reports cancellation returns ctx.Err(), not context.Cause(ctx).
 //
 // When the outcome and the cancellation are both ready, Event, Gate, Latch, and Barrier report
 // the outcome. An event stays set, a gate opening has already happened, and a barrier trip has
@@ -36,7 +38,14 @@
 // synctest.Wait hangs and a leaked goroutine does not fail the bubble.
 package ctxsync
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+// ErrBrokenBarrier is returned by [Barrier.Await] when the barrier is broken. Await returns it
+// unwrapped, so errors.Is and == both match it.
+var ErrBrokenBarrier = errors.New("ctxsync: barrier broken")
 
 // NewLatch returns a [Latch] whose count starts at count. It panics if count is negative, because
 // a negative count is a bug in the caller.
@@ -52,4 +61,13 @@ func NewLatch(count int) *Latch {
 // NewCond returns a [Cond] whose L is locker, as [sync.NewCond] does.
 func NewCond(locker sync.Locker) *Cond {
 	return &Cond{L: locker}
+}
+
+// NewBarrier returns a [Barrier] for parties parties. It panics if parties is less than 1,
+// because a barrier with no parties is a bug in the caller.
+func NewBarrier(parties int) *Barrier {
+	if parties < 1 {
+		panic("ctxsync: Barrier needs at least one party")
+	}
+	return &Barrier{parties: parties}
 }
