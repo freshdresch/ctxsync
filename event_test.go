@@ -15,45 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// eventWaitTimeout bounds the waits in the blocking Event tests. Those tests run in a synctest
-// bubble, so the deadline case advances the fake clock past it and takes no real time.
-const eventWaitTimeout = time.Minute
-
-// startEventWait starts a goroutine that calls event.Wait(ctx) and sends the result on the
-// returned channel. The channel has capacity 1, so the goroutine never blocks on the send.
-func startEventWait(ctx context.Context, event *Event) <-chan error {
-	results := make(chan error, 1)
-	go func() {
-		results <- event.Wait(ctx)
-	}()
-	return results
-}
-
-// assertWaitResult checks, without blocking, that a waiter has sent expected on results. If no
-// result has arrived, it reports the failure, cancels the waiter's context, and receives the
-// waiter's result, so a wrong implementation fails this test instead of deadlocking the bubble.
-func assertWaitResult(
-	t *testing.T,
-	results <-chan error,
-	cancel context.CancelFunc,
-	expected error,
-) {
-	t.Helper()
-	select {
-	case err := <-results:
-		if expected == nil {
-			assert.NoError(t, err)
-		} else {
-			assert.ErrorIs(t, err, expected)
-		}
-	default:
-		t.Errorf("Wait did not return, want %v", expected)
-		cancel()
-		lateErr := <-results
-		t.Logf("after cancel, Wait returned %v", lateErr)
-	}
-}
-
 func TestEventZeroValue(t *testing.T) {
 	var event Event
 	assert.False(t, event.IsSet())
@@ -149,7 +110,7 @@ func TestEventWaitBlocking(t *testing.T) {
 		{
 			name: "Deadline",
 			trigger: func(_ *Event, _ context.CancelFunc) {
-				time.Sleep(eventWaitTimeout)
+				time.Sleep(waitTimeout)
 			},
 			expected: context.DeadlineExceeded,
 		},
@@ -157,10 +118,10 @@ func TestEventWaitBlocking(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(t.Context(), eventWaitTimeout)
+				ctx, cancel := context.WithTimeout(t.Context(), waitTimeout)
 				defer cancel()
 				var event Event
-				results := startEventWait(ctx, &event)
+				results := startWait(func() error { return event.Wait(ctx) })
 				synctest.Wait()
 				require.Empty(t, results, "Wait returned before the trigger")
 

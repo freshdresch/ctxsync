@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "ctxsync.go",
         "event.go",
+        "gate.go",
         "latch.go",
         "wait.go",
     ],
@@ -16,10 +17,12 @@ go_test(
     name = "ctxsync_test",
     srcs = [
         "event_test.go",
+        "gate_test.go",
         "iterations_test.go",
         "latch_test.go",
         "race_off_test.go",
         "race_on_test.go",
+        "wait_helpers_test.go",
         "wait_test.go",
     ],
     embed = [":ctxsync"],

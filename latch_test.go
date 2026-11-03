@@ -15,20 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// latchWaitTimeout bounds the waits in the blocking Latch tests. Those tests run in a synctest
-// bubble, so the deadline case advances the fake clock past it and takes no real time.
-const latchWaitTimeout = time.Minute
-
-// startLatchWait starts a goroutine that calls latch.Wait(ctx) and sends the result on the
-// returned channel. The channel has capacity 1, so the goroutine never blocks on the send.
-func startLatchWait(ctx context.Context, latch *Latch) <-chan error {
-	results := make(chan error, 1)
-	go func() {
-		results <- latch.Wait(ctx)
-	}()
-	return results
-}
-
 // TestLatchZeroValue runs in a bubble, so a Wait that blocked instead of returning at once would
 // leave the bubble deadlocked and fail the test.
 func TestLatchZeroValue(t *testing.T) {
@@ -125,7 +111,7 @@ func TestLatchWaitCountsDown(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		latch := NewLatch(3)
-		results := startLatchWait(ctx, latch)
+		results := startWait(func() error { return latch.Wait(ctx) })
 		synctest.Wait()
 		require.Empty(t, results, "Wait returned before any CountDown")
 
@@ -161,7 +147,7 @@ func TestLatchWaitCanceled(t *testing.T) {
 		{
 			name: "Deadline",
 			trigger: func(_ context.CancelFunc) {
-				time.Sleep(latchWaitTimeout)
+				time.Sleep(waitTimeout)
 			},
 			expected: context.DeadlineExceeded,
 		},
@@ -169,10 +155,10 @@ func TestLatchWaitCanceled(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(t.Context(), latchWaitTimeout)
+				ctx, cancel := context.WithTimeout(t.Context(), waitTimeout)
 				defer cancel()
 				latch := NewLatch(1)
-				results := startLatchWait(ctx, latch)
+				results := startWait(func() error { return latch.Wait(ctx) })
 				synctest.Wait()
 				require.Empty(t, results, "Wait returned before the trigger")
 
