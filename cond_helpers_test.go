@@ -1,6 +1,7 @@
 package ctxsync
 
 import (
+	"context"
 	"slices"
 	"sync"
 )
@@ -78,4 +79,17 @@ func queueLen(c *Cond) int {
 		count++
 	}
 	return count
+}
+
+// startWaiter starts a goroutine that locks c.L, calls c.Wait(ctx), sends the result on the
+// returned channel, and then unlocks c.L. The channel has capacity 1, so the goroutine never
+// blocks on the send.
+func startWaiter(ctx context.Context, c *Cond) <-chan error {
+	results := make(chan error, 1)
+	go func() {
+		c.L.Lock()
+		results <- c.Wait(ctx)
+		c.L.Unlock()
+	}()
+	return results
 }
