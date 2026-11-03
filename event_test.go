@@ -314,7 +314,11 @@ func TestEventAllocations(t *testing.T) {
 		_ = event.Done()
 	}), "Done on a set event")
 
-	ctx := t.Context()
+	// The context is already canceled, so a broken Wait returns an error instead of blocking the
+	// test.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.NoError(t, event.Wait(ctx), "Wait on a set event with a canceled context")
 	assert.Zero(t, testing.AllocsPerRun(100, func() {
 		_ = event.Wait(ctx)
 	}), "Wait on a set event")

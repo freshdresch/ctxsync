@@ -35,3 +35,14 @@
 // process. Blocking inside a bubble on a channel created outside it is not durable blocking, so
 // synctest.Wait hangs and a leaked goroutine does not fail the bubble.
 package ctxsync
+
+// NewLatch returns a [Latch] whose count starts at count. It panics if count is negative, because
+// a negative count is a bug in the caller.
+func NewLatch(count int) *Latch {
+	if count < 0 {
+		panic("ctxsync: negative Latch count")
+	}
+	latch := &Latch{}
+	latch.count.Store(int64(count))
+	return latch
+}

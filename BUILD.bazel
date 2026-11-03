@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "ctxsync.go",
         "event.go",
+        "latch.go",
         "wait.go",
     ],
     importpath = "github.com/freshdresch/go-data-structures/ctxsync",
@@ -16,6 +17,7 @@ go_test(
     srcs = [
         "event_test.go",
         "iterations_test.go",
+        "latch_test.go",
         "race_off_test.go",
         "race_on_test.go",
         "wait_test.go",
