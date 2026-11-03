@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ctxsync",
+    srcs = [
+        "ctxsync.go",
+        "event.go",
+        "wait.go",
+    ],
+    importpath = "github.com/freshdresch/go-data-structures/ctxsync",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ctxsync_test",
+    srcs = [
+        "event_test.go",
+        "iterations_test.go",
+        "race_off_test.go",
+        "race_on_test.go",
+        "wait_test.go",
+    ],
+    embed = [":ctxsync"],
+    deps = [
+        "@com_github_stretchr_testify//assert:assert",
+        "@com_github_stretchr_testify//require:require",
+    ],
+    visibility = ["//:__subpackages__"],
+)
