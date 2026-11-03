@@ -1,0 +1,17 @@
+# Test binaries, built with `go test -c`
+*.test
+
+# Coverage and profile output
+*.out
+*.prof
+
+# Go workspace file
+go.work
+
+# Mac litter
+.DS_Store
+
+# Local design documents, implementation plans, and decision logs
+decisions/
+design/
+plans/

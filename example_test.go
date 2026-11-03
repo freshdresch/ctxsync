@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/freshdresch/go-data-structures/ctxsync"
+	"github.com/freshdresch/ctxsync"
 )
 
 func ExampleEvent() {

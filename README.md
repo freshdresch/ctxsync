@@ -14,7 +14,7 @@ on the type:
   when its last party arrives. A `Barrier` wait also stops when the barrier breaks.
 
 ```sh
-go get github.com/freshdresch/go-data-structures/ctxsync
+go get github.com/freshdresch/ctxsync
 ```
 
 ## Example
@@ -26,7 +26,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/freshdresch/go-data-structures/ctxsync"
+	"github.com/freshdresch/ctxsync"
 )
 
 func main() {
