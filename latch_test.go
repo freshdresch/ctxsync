@@ -179,13 +179,10 @@ func TestLatchWaitCanceled(t *testing.T) {
 // goroutines, the opposite of the edge under test, so it cannot hide a missing edge from the
 // CountDown calls to the reader.
 //
-// The test runs outside synctest, so every wait gives up after happensBeforeTimeout and the
+// The test runs outside synctest, so every wait gives up after boundedWaitTimeout and the
 // reader reports a timeout as a failure instead of blocking the test forever.
 func TestLatchHappensBefore(t *testing.T) {
-	const (
-		happensBeforeTimeout = 10 * time.Second
-		counters             = 4
-	)
+	const counters = 4
 	tests := []struct {
 		name           string
 		waitForRelease func(ctx context.Context, latch *Latch, released <-chan struct{}) error
@@ -193,7 +190,7 @@ func TestLatchHappensBefore(t *testing.T) {
 		{
 			name: "Wait",
 			waitForRelease: func(ctx context.Context, latch *Latch, _ <-chan struct{}) error {
-				ctx, cancel := context.WithTimeout(ctx, happensBeforeTimeout)
+				ctx, cancel := context.WithTimeout(ctx, boundedWaitTimeout)
 				defer cancel()
 				return latch.Wait(ctx)
 			},
@@ -201,7 +198,7 @@ func TestLatchHappensBefore(t *testing.T) {
 		{
 			name: "Released",
 			waitForRelease: func(_ context.Context, _ *Latch, released <-chan struct{}) error {
-				timer := time.NewTimer(happensBeforeTimeout)
+				timer := time.NewTimer(boundedWaitTimeout)
 				defer timer.Stop()
 				select {
 				case <-released:
@@ -214,7 +211,7 @@ func TestLatchHappensBefore(t *testing.T) {
 		{
 			name: "Count",
 			waitForRelease: func(_ context.Context, latch *Latch, _ <-chan struct{}) error {
-				deadline := time.Now().Add(happensBeforeTimeout)
+				deadline := time.Now().Add(boundedWaitTimeout)
 				for latch.Count() != 0 {
 					if time.Now().After(deadline) {
 						return errors.New("Count still above zero at the timeout")

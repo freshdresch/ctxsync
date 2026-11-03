@@ -140,10 +140,9 @@ func TestEventWaitBlocking(t *testing.T) {
 // is blocked on it. The started channel orders the reader before the writer, the opposite of the
 // edge under test, so it cannot hide a missing edge from Set to the reader.
 //
-// The test runs outside synctest, so every wait gives up after happensBeforeTimeout and the
+// The test runs outside synctest, so every wait gives up after boundedWaitTimeout and the
 // reader reports a timeout as a failure instead of blocking the test forever.
 func TestEventHappensBefore(t *testing.T) {
-	const happensBeforeTimeout = 10 * time.Second
 	tests := []struct {
 		name       string
 		waitForSet func(ctx context.Context, event *Event) error
@@ -151,7 +150,7 @@ func TestEventHappensBefore(t *testing.T) {
 		{
 			name: "Wait",
 			waitForSet: func(ctx context.Context, event *Event) error {
-				ctx, cancel := context.WithTimeout(ctx, happensBeforeTimeout)
+				ctx, cancel := context.WithTimeout(ctx, boundedWaitTimeout)
 				defer cancel()
 				return event.Wait(ctx)
 			},
@@ -159,7 +158,7 @@ func TestEventHappensBefore(t *testing.T) {
 		{
 			name: "Done",
 			waitForSet: func(_ context.Context, event *Event) error {
-				timer := time.NewTimer(happensBeforeTimeout)
+				timer := time.NewTimer(boundedWaitTimeout)
 				defer timer.Stop()
 				select {
 				case <-event.Done():
@@ -172,7 +171,7 @@ func TestEventHappensBefore(t *testing.T) {
 		{
 			name: "IsSet",
 			waitForSet: func(_ context.Context, event *Event) error {
-				deadline := time.Now().Add(happensBeforeTimeout)
+				deadline := time.Now().Add(boundedWaitTimeout)
 				for !event.IsSet() {
 					if time.Now().After(deadline) {
 						return errors.New("IsSet still false at the timeout")

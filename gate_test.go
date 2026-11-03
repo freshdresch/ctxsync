@@ -231,10 +231,9 @@ func TestGateWaitAfterOpenShut(t *testing.T) {
 // receives from the channel fetched before the goroutines start, so the mutex inside Opened
 // cannot add an edge that hides the one under test.
 //
-// The test runs outside synctest, so every wait gives up after happensBeforeTimeout and the
+// The test runs outside synctest, so every wait gives up after boundedWaitTimeout and the
 // reader reports a timeout as a failure instead of blocking the test forever.
 func TestGateHappensBefore(t *testing.T) {
-	const happensBeforeTimeout = 10 * time.Second
 	tests := []struct {
 		name        string
 		waitForOpen func(ctx context.Context, gate *Gate, opened <-chan struct{}) error
@@ -242,7 +241,7 @@ func TestGateHappensBefore(t *testing.T) {
 		{
 			name: "Wait",
 			waitForOpen: func(ctx context.Context, gate *Gate, _ <-chan struct{}) error {
-				ctx, cancel := context.WithTimeout(ctx, happensBeforeTimeout)
+				ctx, cancel := context.WithTimeout(ctx, boundedWaitTimeout)
 				defer cancel()
 				return gate.Wait(ctx)
 			},
@@ -250,7 +249,7 @@ func TestGateHappensBefore(t *testing.T) {
 		{
 			name: "Opened",
 			waitForOpen: func(_ context.Context, _ *Gate, opened <-chan struct{}) error {
-				timer := time.NewTimer(happensBeforeTimeout)
+				timer := time.NewTimer(boundedWaitTimeout)
 				defer timer.Stop()
 				select {
 				case <-opened:
@@ -263,7 +262,7 @@ func TestGateHappensBefore(t *testing.T) {
 		{
 			name: "IsOpen",
 			waitForOpen: func(_ context.Context, gate *Gate, _ <-chan struct{}) error {
-				deadline := time.Now().Add(happensBeforeTimeout)
+				deadline := time.Now().Add(boundedWaitTimeout)
 				for !gate.IsOpen() {
 					if time.Now().After(deadline) {
 						return errors.New("IsOpen still false at the timeout")

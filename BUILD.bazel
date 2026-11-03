@@ -17,6 +17,7 @@ go_library(
 go_test(
     name = "ctxsync_test",
     srcs = [
+        "cond_edge_test.go",
         "cond_helpers_test.go",
         "cond_order_test.go",
         "cond_stress_test.go",

@@ -12,6 +12,10 @@ import (
 // so the deadline case advances the fake clock past it and takes no real time.
 const waitTimeout = time.Minute
 
+// boundedWaitTimeout bounds every wait in the tests that run outside synctest, so a wrong
+// implementation fails the test instead of blocking it forever.
+const boundedWaitTimeout = 10 * time.Second
+
 // startWait starts a goroutine that calls wait and sends the result on the returned channel. The
 // channel has capacity 1, so the goroutine never blocks on the send.
 func startWait(wait func() error) <-chan error {
