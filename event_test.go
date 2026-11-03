@@ -171,12 +171,8 @@ func TestEventHappensBefore(t *testing.T) {
 		{
 			name: "IsSet",
 			waitForSet: func(_ context.Context, event *Event) error {
-				deadline := time.Now().Add(boundedWaitTimeout)
-				for !event.IsSet() {
-					if time.Now().After(deadline) {
-						return errors.New("IsSet still false at the timeout")
-					}
-					runtime.Gosched()
+				if !pollUntil(event.IsSet) {
+					return errors.New("IsSet still false at the timeout")
 				}
 				return nil
 			},

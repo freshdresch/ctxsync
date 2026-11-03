@@ -15,16 +15,9 @@ import (
 )
 
 // waitForQueueLen polls c's queue until it holds want records and reports whether it did before
-// boundedWaitTimeout. It is for tests outside synctest, where synctest.Wait is not available.
+// boundedWaitTimeout.
 func waitForQueueLen(c *Cond, want int) bool {
-	deadline := time.Now().Add(boundedWaitTimeout)
-	for queueLen(c) != want {
-		if time.Now().After(deadline) {
-			return false
-		}
-		runtime.Gosched()
-	}
-	return true
+	return pollUntil(func() bool { return queueLen(c) == want })
 }
 
 // errNoResult is what receiveResult returns when no result arrives in time.

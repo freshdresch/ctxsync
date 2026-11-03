@@ -262,12 +262,8 @@ func TestGateHappensBefore(t *testing.T) {
 		{
 			name: "IsOpen",
 			waitForOpen: func(_ context.Context, gate *Gate, _ <-chan struct{}) error {
-				deadline := time.Now().Add(boundedWaitTimeout)
-				for !gate.IsOpen() {
-					if time.Now().After(deadline) {
-						return errors.New("IsOpen still false at the timeout")
-					}
-					runtime.Gosched()
+				if !pollUntil(gate.IsOpen) {
+					return errors.New("IsOpen still false at the timeout")
 				}
 				return nil
 			},

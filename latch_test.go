@@ -211,12 +211,8 @@ func TestLatchHappensBefore(t *testing.T) {
 		{
 			name: "Count",
 			waitForRelease: func(_ context.Context, latch *Latch, _ <-chan struct{}) error {
-				deadline := time.Now().Add(boundedWaitTimeout)
-				for latch.Count() != 0 {
-					if time.Now().After(deadline) {
-						return errors.New("Count still above zero at the timeout")
-					}
-					runtime.Gosched()
+				if !pollUntil(func() bool { return latch.Count() == 0 }) {
+					return errors.New("Count still above zero at the timeout")
 				}
 				return nil
 			},

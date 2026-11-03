@@ -2,6 +2,7 @@ package ctxsync
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
@@ -15,6 +16,19 @@ const waitTimeout = time.Minute
 // boundedWaitTimeout bounds every wait in the tests that run outside synctest, so a wrong
 // implementation fails the test instead of blocking it forever.
 const boundedWaitTimeout = 10 * time.Second
+
+// pollUntil calls condition until it returns true and reports whether it did before
+// boundedWaitTimeout. It is for tests outside synctest, where synctest.Wait is not available.
+func pollUntil(condition func() bool) bool {
+	deadline := time.Now().Add(boundedWaitTimeout)
+	for !condition() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		runtime.Gosched()
+	}
+	return true
+}
 
 // startWait starts a goroutine that calls wait and sends the result on the returned channel. The
 // channel has capacity 1, so the goroutine never blocks on the send.
