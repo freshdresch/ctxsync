@@ -82,3 +82,21 @@ func assertCondWaitResult(
 	}
 	assertWaitResult(t, results, cancelAndBroadcast, expected)
 }
+
+// assertFutureWaitResult is assertWaitResult for a waiter in Future.Wait or Future.Value. If no
+// result has arrived, it also resolves the promise after canceling, so a wait that ignores its
+// context still returns and the bubble does not deadlock.
+func assertFutureWaitResult(
+	t *testing.T,
+	resolver Resolver[int],
+	results <-chan error,
+	cancel context.CancelFunc,
+	expected error,
+) {
+	t.Helper()
+	cancelAndResolve := func() {
+		cancel()
+		resolver.Resolve(0, nil)
+	}
+	assertWaitResult(t, results, cancelAndResolve, expected)
+}

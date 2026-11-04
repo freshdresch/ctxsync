@@ -331,18 +331,40 @@ func TestFutureResolvedCanceledContext(t *testing.T) {
 	assert.ErrorIs(t, err, errProducer, "Value")
 }
 
-// TestFutureUnresolvedCanceledContext runs in a bubble, so a wait that blocked instead of
-// returning at once would leave the bubble deadlocked and fail the test.
+// TestFutureUnresolvedCanceledContext runs each wait in a goroutine in a bubble, so a wait that
+// blocks instead of returning at once is reported by assertFutureWaitResult, which then resolves
+// the promise to free it.
 func TestFutureUnresolvedCanceledContext(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		future, _ := NewPromise[int]()
+	t.Run("Wait", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			future, resolver := NewPromise[int]()
 
-		assert.ErrorIs(t, future.Wait(ctx), context.Canceled, "Wait")
-		value, err := future.Value(ctx)
-		assert.Equal(t, 0, value, "Value")
-		assert.ErrorIs(t, err, context.Canceled, "Value")
+			results := startWait(func() error { return future.Wait(ctx) })
+			synctest.Wait()
+			assertFutureWaitResult(t, resolver, results, cancel, context.Canceled)
+		})
+	})
+
+	t.Run("Value", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			future, resolver := NewPromise[int]()
+
+			// The waiter writes value before it sends its error, and the receive in
+			// assertFutureWaitResult orders that write before the read below.
+			var value int
+			results := startWait(func() error {
+				var err error
+				value, err = future.Value(ctx)
+				return err
+			})
+			synctest.Wait()
+			assertFutureWaitResult(t, resolver, results, cancel, context.Canceled)
+			assert.Equal(t, 0, value, "Value")
+		})
 	})
 }
 
@@ -400,7 +422,7 @@ func TestFutureWaitBlocking(t *testing.T) {
 
 				tc.trigger(resolver, cancel)
 				synctest.Wait()
-				assertWaitResult(t, results, cancel, tc.waitErr)
+				assertFutureWaitResult(t, resolver, results, cancel, tc.waitErr)
 			})
 		})
 	}
@@ -414,7 +436,7 @@ func TestFutureValueBlocking(t *testing.T) {
 				defer cancel()
 				future, resolver := NewPromise[int]()
 				// The waiter writes value before it sends its error, and the receive in
-				// assertWaitResult orders that write before the read below.
+				// assertFutureWaitResult orders that write before the read below.
 				var value int
 				results := startWait(func() error {
 					var err error
@@ -426,7 +448,7 @@ func TestFutureValueBlocking(t *testing.T) {
 
 				tc.trigger(resolver, cancel)
 				synctest.Wait()
-				assertWaitResult(t, results, cancel, tc.valueErr)
+				assertFutureWaitResult(t, resolver, results, cancel, tc.valueErr)
 				assert.Equal(t, tc.value, value)
 			})
 		})
@@ -455,13 +477,19 @@ func TestFutureWaitIgnoresProducerError(t *testing.T) {
 	})
 
 	t.Run("WaitCanceled", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		future, _ := NewPromise[int]()
-		assert.ErrorIs(t, future.Wait(ctx), context.Canceled, "Wait with a canceled context")
-		_, ok, err := future.Result()
-		assert.False(t, ok, "Result ok on an unresolved promise")
-		assert.NoError(t, err, "Result error on an unresolved promise")
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			future, resolver := NewPromise[int]()
+			results := startWait(func() error { return future.Wait(ctx) })
+			synctest.Wait()
+			// Check Result before assertFutureWaitResult, which resolves the promise if Wait
+			// did not return.
+			_, ok, err := future.Result()
+			assert.False(t, ok, "Result ok on an unresolved promise")
+			assert.NoError(t, err, "Result error on an unresolved promise")
+			assertFutureWaitResult(t, resolver, results, cancel, context.Canceled)
+		})
 	})
 }
 
