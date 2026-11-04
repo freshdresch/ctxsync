@@ -41,6 +41,36 @@ func BenchmarkEventWaitBlocking(b *testing.B) {
 	}
 }
 
+// BenchmarkFutureWaitBlocking measures a Wait that a helper goroutine ends by calling Resolve.
+// The helper yields before Resolve, so the waiter is likely blocked, but blocking is not
+// guaranteed. Creating each promise happens with the timer stopped, so the reported time and
+// allocations cover the handoff to the helper and Wait.
+func BenchmarkFutureWaitBlocking(b *testing.B) {
+	resolvers := make(chan Resolver[int])
+	var resolving sync.WaitGroup
+	resolving.Go(func() {
+		for resolver := range resolvers {
+			runtime.Gosched()
+			resolver.Resolve(1, nil)
+		}
+	})
+	defer func() {
+		close(resolvers)
+		resolving.Wait()
+	}()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		b.StopTimer()
+		future, resolver := NewPromise[int]()
+		b.StartTimer()
+		resolvers <- resolver
+		if err := future.Wait(b.Context()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkCondWaitBlocking measures a Wait that the benchmark ends by calling Signal once the
 // waiter is queued.
 func BenchmarkCondWaitBlocking(b *testing.B) {
