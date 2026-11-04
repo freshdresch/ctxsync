@@ -12,8 +12,9 @@ import (
 type Latch struct {
 	mu sync.Mutex
 	// count is the remaining count. The latch is open at zero, so the zero Latch is open. After
-	// construction, count is read without mu but changed only while holding mu. Released relies
-	// on this to decide, under mu, whether to create its channel already closed.
+	// construction, count is changed only while holding mu, and stored as zero after released is
+	// closed. Count and Released read it under mu, so they see all of a CountDown or none of it.
+	// The fast path of Wait reads it without mu.
 	count atomic.Int64
 	// released is created lazily under mu. The CountDown that brings the count to zero closes it,
 	// or Released creates it already closed if the count is already zero.
@@ -33,9 +34,8 @@ func (l *Latch) CountDown() {
 	case 0:
 		return
 	case 1:
-		// Closing released before storing 0 means that once Count returns 0, any existing
-		// released channel is already closed. A Wait that decides after that point then reports
-		// the release.
+		// The fast path of Wait reads count without mu, so 0 must be stored after released is
+		// closed. Otherwise a Wait could return nil while a waiter's channel is still open.
 		if l.released != nil {
 			close(l.released)
 		}
@@ -45,9 +45,13 @@ func (l *Latch) CountDown() {
 	}
 }
 
-// Count returns the remaining count. It does not wait and does not allocate. If Count returns 0,
-// the [Latch.CountDown] calls that brought the count to zero happen before Count returns.
+// Count returns the remaining count. It does not block on the state and does not allocate. Count
+// holds the latch's mutex, which each [Latch.CountDown] call holds until it has changed the count,
+// so if Count returns 0, the CountDown calls that brought the count to zero happen before Count
+// returns.
 func (l *Latch) Count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	return int(l.count.Load())
 }
 

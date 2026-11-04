@@ -10,8 +10,9 @@ import (
 // is ready to use. A Gate must not be copied after first use.
 type Gate struct {
 	mu sync.Mutex
-	// open is read without mu but stored only while holding mu. Opened relies on this to decide,
-	// under mu, whether to create its channel already closed.
+	// open is stored only while holding mu, and stored as true after opened is closed. IsOpen and
+	// Opened read it under mu, so they see all of an Open or none of it. The fast path of Wait
+	// reads it without mu.
 	open atomic.Bool
 	// opened is created lazily under mu, and each opening has its own channel. While the gate is
 	// shut, opened is nil or an unclosed channel for the next opening. While the gate is open,
@@ -30,9 +31,8 @@ func (g *Gate) Open() {
 	if g.open.Load() {
 		return
 	}
-	// Closing opened before storing open means that once IsOpen returns true, any existing
-	// channel for this opening is already closed. A Wait that decides after that point then
-	// reports the opening.
+	// The fast path of Wait reads open without mu, so open must be stored after opened is closed.
+	// Otherwise a Wait could return nil while a waiter's channel for this opening is still open.
 	if g.opened != nil {
 		close(g.opened)
 	}
@@ -51,10 +51,12 @@ func (g *Gate) Shut() {
 	g.opened = nil
 }
 
-// IsOpen reports whether the gate is open. It does not wait and does not allocate. If IsOpen
-// returns true, the [Gate.Open] call that started the opening it observed happens before IsOpen
-// returns.
+// IsOpen reports whether the gate is open. It does not block on the state and does not allocate.
+// IsOpen holds the gate's mutex, which [Gate.Open] holds until the gate is open, so if IsOpen
+// returns true, the Open call that started the opening it observed happens before IsOpen returns.
 func (g *Gate) IsOpen() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	return g.open.Load()
 }
 
@@ -79,11 +81,12 @@ func (g *Gate) Opened() <-chan struct{} {
 	return g.opened
 }
 
-// Wait blocks until the gate opens or ctx is done. It returns nil if the gate is open at some
-// moment between when Wait reads the gate's state and when Wait decides, even when ctx is done too
-// and even if the gate shuts again before Wait decides. Otherwise it returns ctx.Err(). If the
-// gate is already open, Wait returns nil at once. The gate may be shut again by the time the
-// caller acts on a nil result. Wait panics if ctx is nil.
+// Wait blocks until the gate opens or ctx is done. The moment that counts is when Wait obtains
+// its channel from [Gate.Opened], under the gate's mutex. Wait returns nil if the gate is open at
+// some moment between then and when Wait decides, even when ctx is done too and even if the gate
+// shuts again before Wait decides. Otherwise it returns ctx.Err(). If Wait finds the gate already
+// open before it obtains a channel, it returns nil at once. The gate may be shut again by the
+// time the caller acts on a nil result. Wait panics if ctx is nil.
 //
 // When Wait returns nil, the [Gate.Open] call that started the opening it observed happens before
 // Wait returns.

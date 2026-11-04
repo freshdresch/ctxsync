@@ -104,7 +104,7 @@ The zero value is an unset `Event` that is ready to use.
 | Method | Description |
 |---|---|
 | `Set()` | Sets the event and wakes every waiter. Calls after the first do nothing. |
-| `IsSet()` | Reports whether `Set` has been called. It does not wait or allocate. |
+| `IsSet()` | Reports whether `Set` has been called. It does not block on the state and does not allocate. |
 | `Done()` | Returns a channel that closes once `Set` has been called. Every call returns the same channel. |
 | `Wait(ctx)` | Blocks until the event is set or `ctx` is done. It returns nil if the event is set by the time it decides, even when `ctx` is done too. |
 
@@ -116,9 +116,9 @@ The zero value is a shut `Gate` that is ready to use.
 |---|---|
 | `Open()` | Opens the gate and wakes every waiter. On an open gate, it does nothing. |
 | `Shut()` | Shuts the gate. On a shut gate, it does nothing. |
-| `IsOpen()` | Reports whether the gate is open. It does not wait or allocate. |
+| `IsOpen()` | Reports whether the gate is open. It does not block on the state and does not allocate. |
 | `Opened()` | Returns the channel of one opening. While the gate is open, it returns the already closed channel of the current opening. While the gate is shut, it returns the channel that the next `Open` closes. Calls during one opening, or during one shut period, return the same channel. |
-| `Wait(ctx)` | Blocks until the gate opens or `ctx` is done. It returns nil if the gate is open at some moment between when it reads the gate's state and when it decides, even when `ctx` is done too. |
+| `Wait(ctx)` | Blocks until the gate opens or `ctx` is done. It returns nil if the gate is open at some moment between when it obtains its channel from `Opened` and when it decides, even when `ctx` is done too. If it finds the gate already open before it obtains a channel, it returns nil at once. |
 
 A channel from `Opened` stays closed after a later `Shut`, so call `Opened` again after each
 wakeup. A loop that selects only on `Opened()` spins while the gate stays open, because every call
@@ -133,7 +133,7 @@ negative. The zero value is an open `Latch` with count 0.
 | Method | Description |
 |---|---|
 | `CountDown()` | Decrements the count. When the count reaches zero, the latch opens and wakes every waiter. At count zero, `CountDown` does nothing. |
-| `Count()` | Returns the remaining count. It does not wait or allocate. |
+| `Count()` | Returns the remaining count. It does not block on the state and does not allocate. |
 | `Released()` | Returns a channel that closes once the count reaches zero. Every call returns the same channel. |
 | `Wait(ctx)` | Blocks until the count reaches zero or `ctx` is done. It returns nil if the count is zero by the time it decides, even when `ctx` is done too. |
 

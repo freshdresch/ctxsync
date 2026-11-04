@@ -3,10 +3,13 @@ package ctxsync
 import (
 	"context"
 	"runtime"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // waitTimeout bounds the waits in the blocking wait tests. Those tests run in a synctest bubble,
@@ -28,6 +31,86 @@ func pollUntil(condition func() bool) bool {
 		runtime.Gosched()
 	}
 	return true
+}
+
+// midChangeWindow is how long checkQueryMidChange waits to confirm that a query is still blocked
+// on the mutex of a state change in progress.
+const midChangeWindow = 100 * time.Millisecond
+
+// pollUntilBlockedInWait reports whether a goroutine started by checkQueryMidChange is blocked in
+// waitClosed before boundedWaitTimeout. It reads the stacks of all goroutines, because outside
+// synctest nothing else shows that a waiter holds its channel and has released the mutex.
+func pollUntilBlockedInWait() bool {
+	stacks := make([]byte, 1<<20)
+	return pollUntil(func() bool {
+		length := runtime.Stack(stacks, true)
+		for goroutine := range strings.SplitSeq(string(stacks[:length]), "\n\n") {
+			header, _, _ := strings.Cut(goroutine, "\n")
+			if strings.Contains(header, "[select") &&
+				strings.Contains(goroutine, "ctxsync.waitClosed(") &&
+				strings.Contains(goroutine, "ctxsync.checkQueryMidChange[") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// midChange is a state change split at the point where it has closed the waiters' channel but has
+// not stored the new state, for checkQueryMidChange.
+type midChange[T any] struct {
+	wait  func(ctx context.Context) error
+	query func() T
+	// begin locks the type's mutex and closes the waiters' channel without storing the new state.
+	begin func()
+	// finish stores the new state and unlocks the mutex.
+	finish func()
+}
+
+// checkQueryMidChange checks that a query agrees with a nil wait in the middle of a state change.
+// It blocks a waiter, then runs change.begin. The waiter wakes, returns nil, and then calls the
+// query. checkQueryMidChange requires that the waiter's Wait returned nil and that its query does
+// not return while the state change is in progress. It then runs change.finish and requires that
+// the query reports expected.
+//
+// It receives the Wait result before it checks the query, so a slow waiter cannot query after
+// change.finish and let a lock-free query pass. It runs outside synctest, because a goroutine
+// blocked on a mutex is not durably blocked, so every wait is bounded.
+func checkQueryMidChange[T any](t *testing.T, change midChange[T], expected T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), boundedWaitTimeout)
+	defer cancel()
+	waitResults := make(chan error, 1)
+	queryResults := make(chan T, 1)
+	go func() {
+		waitResults <- change.wait(ctx)
+		queryResults <- change.query()
+	}()
+	require.True(t, pollUntilBlockedInWait(), "the waiter did not block in Wait")
+
+	finish := sync.OnceFunc(change.finish)
+	change.begin()
+	defer finish()
+	select {
+	case err := <-waitResults:
+		require.NoError(t, err, "Wait after the channel closed")
+	case <-time.After(boundedWaitTimeout):
+		require.FailNow(t, "Wait did not return after the channel closed")
+	}
+	select {
+	case early := <-queryResults:
+		require.FailNowf(t, "the query returned while the state change was in progress",
+			"it returned %v", early)
+	case <-time.After(midChangeWindow):
+	}
+
+	finish()
+	select {
+	case result := <-queryResults:
+		assert.Equal(t, expected, result, "the query after the state change finished")
+	case <-time.After(boundedWaitTimeout):
+		require.FailNow(t, "the query did not return after the state change finished")
+	}
 }
 
 // startWait starts a goroutine that calls wait and sends the result on the returned channel. The

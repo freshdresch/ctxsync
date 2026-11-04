@@ -111,7 +111,16 @@ func TestLatchWaitCountsDown(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		latch := NewLatch(3)
-		results := startWait(func() error { return latch.Wait(ctx) })
+		// The waiter queries right after Wait returns nil and sends the result before its Wait
+		// result, so the query is ready once assertWaitResult receives a nil Wait result.
+		counts := make(chan int, 1)
+		results := startWait(func() error {
+			err := latch.Wait(ctx)
+			if err == nil {
+				counts <- latch.Count()
+			}
+			return err
+		})
 		synctest.Wait()
 		require.Empty(t, results, "Wait returned before any CountDown")
 
@@ -125,7 +134,29 @@ func TestLatchWaitCountsDown(t *testing.T) {
 		latch.CountDown()
 		synctest.Wait()
 		assertWaitResult(t, results, cancel, nil)
+		select {
+		case reported := <-counts:
+			assert.Equal(t, 0, reported, "Count right after Wait returned nil")
+		default:
+			// assertWaitResult already reported that Wait did not return nil.
+		}
 	})
+}
+
+func TestLatchCountMidCountDown(t *testing.T) {
+	latch := NewLatch(1)
+	checkQueryMidChange(t, midChange[int]{
+		wait:  latch.Wait,
+		query: latch.Count,
+		begin: func() {
+			latch.mu.Lock()
+			close(latch.released)
+		},
+		finish: func() {
+			latch.count.Store(0)
+			latch.mu.Unlock()
+		},
+	}, 0)
 }
 
 // TestLatchWaitCanceled has no case where the release and cancellation are both ready. The
