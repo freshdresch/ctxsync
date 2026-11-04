@@ -10,23 +10,57 @@ code that waits for the result. It can wait and read, but it cannot resolve. The
 
 ## Example
 
+Two HTTP requests run at the same time, and the caller waits for both results:
+
 ```go
-errAbandoned := errors.New("producer abandoned the promise")
-
-future, resolver := ctxsync.NewPromise[int]()
-go func() {
-	defer resolver.Resolve(0, errAbandoned)
-	resolver.Resolve(work(ctx))
-}()
-
-value, err := future.Value(ctx)
-if err != nil {
-	return err
+// fetch starts a GET request for url and returns a Future for the response body.
+func fetch(ctx context.Context, client *http.Client, url string) ctxsync.Future[[]byte] {
+	future, resolver := ctxsync.NewPromise[[]byte]()
+	go func() {
+		resolver.Resolve(get(ctx, client, url))
+	}()
+	return future
 }
-fmt.Println(value)
+
+// get returns the body of a GET request for url.
+func get(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get %q: status %d", url, response.StatusCode)
+	}
+	return io.ReadAll(response.Body)
+}
+
+func showUser(ctx context.Context, client *http.Client, baseURL string) error {
+	// Both requests start now and run at the same time.
+	profile := fetch(ctx, client, baseURL+"/users/42")
+	orders := fetch(ctx, client, baseURL+"/users/42/orders")
+
+	profileBody, err := profile.Value(ctx)
+	if err != nil {
+		return fmt.Errorf("profile: %w", err)
+	}
+	ordersBody, err := orders.Value(ctx)
+	if err != nil {
+		return fmt.Errorf("orders: %w", err)
+	}
+	fmt.Printf("profile: %s\norders: %s\n", profileBody, ordersBody)
+	return nil
+}
 ```
 
-Here `work` returns `(int, error)`. The deferred call is explained under
+`fetch` returns as soon as the request starts, so `showUser` has both requests in flight before it
+waits for either. Each `Value` call waits for its own request, or returns early if `ctx` ends.
+`get` returns its result on every path, so the one `Resolve` in `fetch` always runs. If the
+producer may run under code that recovers panics, see
 [Resolve on every path](#resolve-on-every-path).
 
 ## API
