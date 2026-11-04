@@ -2,6 +2,7 @@ package ctxsync_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -167,4 +168,61 @@ func ExampleBarrier() {
 	parties.Wait()
 	fmt.Println("passed:", passed.Load())
 	// Output: passed: 2
+}
+
+func ExampleNewPromise() {
+	errAbandoned := errors.New("producer abandoned the promise")
+	// work returns its result through its return values, so every path through it reaches the
+	// single Resolve below.
+	work := func(ctx context.Context) (int, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		return 42, nil
+	}
+
+	ctx := context.Background()
+	future, resolver := ctxsync.NewPromise[int]()
+	go func() {
+		// If work panics or calls runtime.Goexit, this call resolves the promise. Otherwise
+		// the Resolve below wins, and this call does nothing.
+		defer resolver.Resolve(0, errAbandoned)
+		resolver.Resolve(work(ctx))
+	}()
+
+	value, err := future.Value(ctx)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(value)
+	// Output: 42
+}
+
+func ExampleFuture_Wait() {
+	future, resolver := ctxsync.NewPromise[string]()
+
+	// describe tells a canceled wait apart from a producer that failed, even when both report
+	// context.Canceled.
+	describe := func(ctx context.Context) string {
+		if err := future.Wait(ctx); err != nil {
+			return "wait ended: " + err.Error()
+		}
+		// Wait returned nil, so the promise is resolved and ok is always true here.
+		value, _, err := future.Result()
+		if err != nil {
+			return "producer failed: " + err.Error()
+		}
+		return "value: " + value
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	fmt.Println(describe(canceled))
+
+	resolver.Resolve("", context.Canceled)
+	fmt.Println(describe(context.Background()))
+	// Output:
+	// wait ended: context canceled
+	// producer failed: context canceled
 }

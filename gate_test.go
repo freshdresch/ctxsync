@@ -119,13 +119,17 @@ func TestGateWaitBlocking(t *testing.T) {
 		name     string
 		trigger  func(gate *Gate, cancel context.CancelFunc)
 		expected error
+		// reportsOpen is whether IsOpen must report true right after Wait returns nil.
+		// OpenThenShut leaves it false, because its Shut may run before the waiter reads IsOpen.
+		reportsOpen bool
 	}{
 		{
 			name: "Open",
 			trigger: func(gate *Gate, _ context.CancelFunc) {
 				gate.Open()
 			},
-			expected: nil,
+			expected:    nil,
+			reportsOpen: true,
 		},
 		{
 			name: "OpenThenShut",
@@ -156,13 +160,32 @@ func TestGateWaitBlocking(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), waitTimeout)
 				defer cancel()
 				var gate Gate
-				results := startWait(func() error { return gate.Wait(ctx) })
+				// The waiter queries right after Wait returns nil and sends the result before
+				// its Wait result, so the query is ready once assertWaitResult receives a nil
+				// Wait result.
+				isOpen := make(chan bool, 1)
+				results := startWait(func() error {
+					err := gate.Wait(ctx)
+					if err == nil {
+						isOpen <- gate.IsOpen()
+					}
+					return err
+				})
 				synctest.Wait()
 				require.Empty(t, results, "Wait returned before the trigger")
 
 				tc.trigger(&gate, cancel)
 				synctest.Wait()
 				assertWaitResult(t, results, cancel, tc.expected)
+				if !tc.reportsOpen {
+					return
+				}
+				select {
+				case reported := <-isOpen:
+					assert.True(t, reported, "IsOpen right after Wait returned nil")
+				default:
+					// assertWaitResult already reported that Wait did not return nil.
+				}
 			})
 		})
 	}
@@ -305,6 +328,22 @@ func TestGateHappensBefore(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGateIsOpenMidOpen(t *testing.T) {
+	var gate Gate
+	checkQueryMidChange(t, midChange[bool]{
+		wait:  gate.Wait,
+		query: gate.IsOpen,
+		begin: func() {
+			gate.mu.Lock()
+			close(gate.opened)
+		},
+		finish: func() {
+			gate.open.Store(true)
+			gate.mu.Unlock()
+		},
+	}, true)
 }
 
 // TestGateStress checks that every nil Wait reports an opening it could have observed. The opener

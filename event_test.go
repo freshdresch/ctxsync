@@ -121,13 +121,32 @@ func TestEventWaitBlocking(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), waitTimeout)
 				defer cancel()
 				var event Event
-				results := startWait(func() error { return event.Wait(ctx) })
+				// The waiter queries right after Wait returns nil and sends the result before
+				// its Wait result, so the query is ready once assertWaitResult receives a nil
+				// Wait result.
+				isSet := make(chan bool, 1)
+				results := startWait(func() error {
+					err := event.Wait(ctx)
+					if err == nil {
+						isSet <- event.IsSet()
+					}
+					return err
+				})
 				synctest.Wait()
 				require.Empty(t, results, "Wait returned before the trigger")
 
 				tc.trigger(&event, cancel)
 				synctest.Wait()
 				assertWaitResult(t, results, cancel, tc.expected)
+				if tc.expected != nil {
+					return
+				}
+				select {
+				case reported := <-isSet:
+					assert.True(t, reported, "IsSet right after Wait returned nil")
+				default:
+					// assertWaitResult already reported that Wait did not return nil.
+				}
 			})
 		})
 	}
@@ -214,6 +233,22 @@ func TestEventHappensBefore(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEventIsSetMidSet(t *testing.T) {
+	var event Event
+	checkQueryMidChange(t, midChange[bool]{
+		wait:  event.Wait,
+		query: event.IsSet,
+		begin: func() {
+			event.mu.Lock()
+			close(event.done)
+		},
+		finish: func() {
+			event.set.Store(true)
+			event.mu.Unlock()
+		},
+	}, true)
 }
 
 func TestEventStress(t *testing.T) {
