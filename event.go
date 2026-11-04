@@ -10,8 +10,9 @@ import (
 // Event that is ready to use. An Event must not be copied after first use.
 type Event struct {
 	mu sync.Mutex
-	// set is stored only while holding mu, after done is closed. IsSet and Done read it under mu,
-	// so they see all of a Set or none of it. The fast paths of Set and Wait read it without mu.
+	// set is stored only while holding mu, after closing done, if it exists. IsSet and Done read it
+	// under mu, so they see all of a Set or none of it. The fast paths of Set and Wait read it
+	// without mu.
 	set atomic.Bool
 	// done is created lazily under mu. The first Set closes it, or Done creates it already closed
 	// if Set ran first.

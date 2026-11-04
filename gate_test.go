@@ -330,13 +330,6 @@ func TestGateHappensBefore(t *testing.T) {
 	}
 }
 
-// TestGateStress checks that every nil Wait reports an opening it could have observed. The opener
-// keeps opening set whenever the gate is open and advances openings before every Open. A waiter
-// that read opening as false saw the gate shut, so an opening it reports must have started later
-// and advanced openings past the value it read first. The Open-to-Wait happens-before edge makes
-// the waiter's later read of openings see that advance. Each waiter calls Wait once per cycle, so
-// Wait calls that start during later cycles are checked too. The gate stays open after the last
-// opening, so every remaining Wait returns nil and every waiter ends.
 func TestGateIsOpenMidOpen(t *testing.T) {
 	var gate Gate
 	checkQueryMidChange(t, midChange[bool]{
@@ -353,6 +346,13 @@ func TestGateIsOpenMidOpen(t *testing.T) {
 	}, true)
 }
 
+// TestGateStress checks that every nil Wait reports an opening it could have observed. The opener
+// keeps opening set whenever the gate is open and advances openings before every Open. A waiter
+// that read opening as false saw the gate shut, so an opening it reports must have started later
+// and advanced openings past the value it read first. The Open-to-Wait happens-before edge makes
+// the waiter's later read of openings see that advance. Each waiter calls Wait once per cycle, so
+// Wait calls that start during later cycles are checked too. The gate stays open after the last
+// opening, so every remaining Wait returns nil and every waiter ends.
 func TestGateStress(t *testing.T) {
 	const (
 		cycles  = 8

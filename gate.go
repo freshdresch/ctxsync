@@ -10,9 +10,9 @@ import (
 // is ready to use. A Gate must not be copied after first use.
 type Gate struct {
 	mu sync.Mutex
-	// open is stored only while holding mu, and stored as true after opened is closed. IsOpen and
-	// Opened read it under mu, so they see all of an Open or none of it. The fast path of Wait
-	// reads it without mu.
+	// open is stored only while holding mu, and stored as true after closing opened, if it exists.
+	// IsOpen and Opened read it under mu, so they see all of an Open or none of it. The fast path
+	// of Wait reads it without mu.
 	open atomic.Bool
 	// opened is created lazily under mu, and each opening has its own channel. While the gate is
 	// shut, opened is nil or an unclosed channel for the next opening. While the gate is open,

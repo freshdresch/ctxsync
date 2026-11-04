@@ -12,9 +12,9 @@ import (
 type Latch struct {
 	mu sync.Mutex
 	// count is the remaining count. The latch is open at zero, so the zero Latch is open. After
-	// construction, count is changed only while holding mu, and stored as zero after released is
-	// closed. Count and Released read it under mu, so they see all of a CountDown or none of it.
-	// The fast path of Wait reads it without mu.
+	// construction, count is changed only while holding mu, and stored as zero after closing
+	// released, if it exists. Count and Released read it under mu, so they see all of a CountDown
+	// or none of it. The fast path of Wait reads it without mu.
 	count atomic.Int64
 	// released is created lazily under mu. The CountDown that brings the count to zero closes it,
 	// or Released creates it already closed if the count is already zero.
