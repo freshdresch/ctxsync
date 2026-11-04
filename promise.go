@@ -32,9 +32,9 @@ type promiseState[T any] struct {
 // a variable or field that was declared but never set, so the panic reports that bug at its
 // first use.
 //
-// A Future is a handle that holds only a pointer to the promise. Unlike the other types in this
-// package, it may be copied, passed by value, and stored in maps, and every copy refers to the
-// same promise. Two Futures are equal under == when they refer to the same promise.
+// A Future is a handle that holds only a pointer to the promise. Unlike [Event], [Gate], [Latch],
+// [Cond], and [Barrier], it may be copied, passed by value, and stored in maps, and every copy
+// refers to the same promise. Two Futures are equal under == when they refer to the same promise.
 //
 // The value and error are returned by copy, as with any Go assignment. When T is a pointer,
 // slice, map, or other reference type, every reader shares what it refers to, and the promise
@@ -52,9 +52,10 @@ type Future[T any] struct {
 // come from a variable or field that was declared but never set, so the panic reports that bug at
 // its first use.
 //
-// A Resolver is a handle that holds only a pointer to the promise. Unlike the other types in this
-// package, it may be copied, passed by value, and stored in maps, and every copy refers to the
-// same promise. Two Resolvers are equal under == when they refer to the same promise.
+// A Resolver is a handle that holds only a pointer to the promise. Unlike [Event], [Gate],
+// [Latch], [Cond], and [Barrier], it may be copied, passed by value, and stored in maps, and every
+// copy refers to the same promise. Two Resolvers are equal under == when they refer to the same
+// promise.
 //
 // Resolve is safe for concurrent use.
 type Resolver[T any] struct {
@@ -174,10 +175,10 @@ func (f Future[T]) Wait(ctx context.Context) error {
 // returns an error, Value returns the zero value and that error. Otherwise it returns the stored
 // value and error. Value panics if ctx is nil. Otherwise it panics if f is a zero Future.
 //
-// Unlike every other wait in this package, Value can return an error that is neither nil nor
-// ctx.Err(), because returning the producer's outcome is its purpose. A caller therefore cannot
-// tell from Value alone whether a [context.Canceled] came from its own context or from the
-// producer. A caller that needs the distinction calls Wait and then [Future.Result].
+// Unlike every other wait in this package, Value can also return the producer's error, because
+// returning the producer's outcome is its purpose. A caller therefore cannot tell from Value
+// alone whether a [context.Canceled] came from its own context or from the producer. A caller
+// that needs the distinction calls Wait and then [Future.Result].
 //
 // The end of ctx stops only this wait. It does not reach the producer, which keeps working, and
 // its Resolve still succeeds. A producer that should stop needs its own context.

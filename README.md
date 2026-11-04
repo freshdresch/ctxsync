@@ -3,7 +3,7 @@
 `ctxsync` provides synchronization primitives whose waits take a `context.Context`. Use `Event`
 for a one-shot flag, `Gate` for a flag that opens and shuts again, `Latch` for a countdown that
 opens at zero, `Cond` for a condition variable, `Barrier` for a meeting point of a fixed number
-of parties, and `Promise` for a value and an error that one producer resolves once and any number
+of parties, and `Future` for a value and an error that one producer resolves once and any number
 of goroutines wait for. A wait stops when its outcome happens or its context ends. The outcome
 depends on the type:
 
@@ -13,7 +13,7 @@ depends on the type:
 - `Cond`: a `Signal` or `Broadcast` wakes the waiter.
 - `Barrier`: the wait's generation trips. A generation is one round of arrivals, and it trips
   when its last party arrives. A `Barrier` wait also stops when the barrier breaks.
-- `Promise`: the promise is resolved.
+- `Future`: its producer resolves it.
 
 ```sh
 go get github.com/freshdresch/ctxsync
@@ -58,8 +58,8 @@ ready
   context already done. A `Cond` wait decides after it locks `L` again.
 - A wait returns nil when it has observed its outcome by the time it decides. It returns
   `ErrBrokenBarrier` when it waits on a broken `Barrier`, and `ctx.Err()` when the context has
-  ended and the wait has not observed its outcome. `Future.Value` is the exception. It also
-  returns the producer's error, because returning the producer's outcome is its purpose.
+  ended and the wait has not observed its outcome. `Future.Value` can also return the producer's
+  error, because returning the producer's outcome is its purpose.
 - When a cancellation breaks a `Barrier`, a party can return `ErrBrokenBarrier` or `ctx.Err()`.
   The `Barrier` section says which party returns which.
 - A wait that reports cancellation returns `ctx.Err()`, not `context.Cause(ctx)`.
@@ -84,7 +84,7 @@ ready
 - Construct each primitive inside the `testing/synctest` bubble that uses it. Never share a
   primitive across a bubble boundary, whether between two bubbles or between a bubble and code
   outside every bubble. `Event`, `Gate`, `Latch`, `Cond`, and `Barrier` create channels as they
-  run, so any use can tie one of them to a bubble. A promise is tied to the bubble that ran
+  run, so any use can tie one of them to a bubble. A `Future` is tied to the bubble that ran
   `NewPromise`, which creates its channel, so resolving it from outside that bubble ends the
   process.
 - Using a channel created inside a bubble from outside it ends the process. Blocking inside a
@@ -225,28 +225,33 @@ they return after the break.
 | `Waiting()` | Returns a snapshot of the number of parties blocked in the current generation. It returns 0 when no generation is filling or the barrier is broken. |
 | `IsBroken()` | Reports whether the barrier is broken. A true result stays true, because a broken barrier stays broken. |
 
-### Promise
+### Future
 
-`NewPromise[T]()` returns the two ends of one unresolved promise: a `Future[T]` that reads it and
-a `Resolver[T]` that resolves it. Both are handles that hold only a pointer. You can copy them,
-pass them by value, and store them in maps. Two handles of the same kind are equal under `==`
-when they refer to the same promise. Neither handle has a usable zero value, and every method on
-a zero handle panics.
+`NewPromise[T]()` returns an unresolved `Future[T]` and its `Resolver[T]`. A `Future` is a one-shot
+future whose waits take a context. It holds a value and an error that one producer resolves once,
+and any number of goroutines can wait for them. Consumers hold and pass the `Future[T]`, which can
+wait for the outcome but cannot resolve it. The producer calls `NewPromise`, keeps the
+`Resolver[T]`, and calls `Resolve` when its work is done.
+
+The `Future` and the `Resolver` are handles that hold only a pointer. You can copy them, pass them
+by value, and store them in maps. Two handles of the same kind are equal under `==` when they come
+from the same `NewPromise` call. Neither handle has a usable zero value, and every method on a
+zero handle panics.
 
 | Method | Description |
 |---|---|
-| `Resolver.Resolve(value, err)` | Resolves the promise with `value` and `err`, wakes every waiter, and returns true. If the promise is already resolved, it returns false and the stored value and error do not change. |
-| `Future.Done()` | Returns a channel that closes once the promise is resolved. Every call returns the same channel. |
-| `Future.IsResolved()` | Reports whether the promise is resolved. It does not wait or allocate. |
-| `Future.Wait(ctx)` | Blocks until the promise is resolved or `ctx` is done. It returns nil if the promise is resolved by the time it decides, even when `ctx` is done too. It never returns the producer's error. |
+| `Resolver.Resolve(value, err)` | Resolves the `Future` with `value` and `err`, wakes every waiter, and returns true. If the `Future` is already resolved, it returns false and the stored value and error do not change. |
+| `Future.Done()` | Returns a channel that closes once the `Future` is resolved. Every call returns the same channel. |
+| `Future.IsResolved()` | Reports whether the `Future` is resolved. It does not wait or allocate. |
+| `Future.Wait(ctx)` | Blocks until the `Future` is resolved or `ctx` is done. It returns nil if the `Future` is resolved by the time it decides, even when `ctx` is done too. It never returns the producer's error. |
 | `Future.Result()` | Returns the stored value, true, and the stored error without waiting. Before resolution, it returns the zero value, false, and nil. |
 | `Future.Value(ctx)` | Waits as `Wait` does. If `Wait` returns an error, it returns the zero value and that error. Otherwise it returns the stored value and error. |
 
-The promise stores the value and the error as given. A nil error is a success, and a non-nil
+The `Future` stores the value and the error as given. A nil error is a success, and a non-nil
 error is a failure that still carries the value. When `T` is a pointer, slice, map, or other
 reference type, every reader shares what it refers to.
 
-Check `ok` from `Result`. On an unresolved promise, `v, _, err := f.Result()` gives a zero value
+Check `ok` from `Result`. On an unresolved `Future`, `v, _, err := f.Result()` gives a zero value
 and a nil error, which looks like success. Discarding `ok` is safe right after `Wait` returned
 nil. `Value` cannot tell you whether a `context.Canceled` came from your context or from the
 producer. If you need the distinction, call `Wait` and then `Result`.
@@ -255,9 +260,9 @@ A waiter's cancellation does not reach the producer. When every waiter gives up,
 keeps working, and its `Resolve` still succeeds. Give the producer its own context if it should
 stop.
 
-Every path through the producer must resolve the promise, including early returns on errors,
-panics, and `runtime.Goexit`. A promise that is never resolved blocks every wait whose context
-never ends. Put the work in a function that returns `(T, error)`, resolve once with its result,
+Every path through the producer must call `Resolve`, including early returns on errors, panics,
+and `runtime.Goexit`. A `Future` that is never resolved blocks every wait whose context never
+ends. Put the work in a function that returns `(T, error)`, resolve once with its result,
 and defer an abandonment call in front of it:
 
 ```go

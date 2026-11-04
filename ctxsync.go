@@ -8,11 +8,11 @@
 //
 // A wait returns nil when it has observed its outcome by the time it decides, [ErrBrokenBarrier]
 // when it waits on a broken Barrier, and ctx.Err() when the context has ended and it has not
-// observed its outcome. When a cancellation breaks a Barrier, both rules can apply, and the doc
-// of [Barrier.Await] says which of its parties returns ErrBrokenBarrier and which returns
-// ctx.Err(). A wait that reports cancellation returns ctx.Err(), not context.Cause(ctx).
-// [Future.Value] is the exception. It also returns the producer's error, because returning the
-// producer's outcome is its purpose.
+// observed its outcome. [Future.Value] can also return the producer's error, because returning
+// the producer's outcome is its purpose. When a cancellation breaks a Barrier, both rules can
+// apply, and the doc of [Barrier.Await] says which of its parties returns ErrBrokenBarrier and
+// which returns ctx.Err(). A wait that reports cancellation returns ctx.Err(), not
+// context.Cause(ctx).
 //
 // When the outcome and the cancellation are both ready, Event, Gate, Latch, Barrier, and Future
 // report the outcome. An event stays set, a gate opening has already happened, a barrier trip has

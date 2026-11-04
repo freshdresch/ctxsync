@@ -363,6 +363,8 @@ func TestFutureUnresolvedCanceledContext(t *testing.T) {
 			})
 			synctest.Wait()
 			assertFutureWaitResult(t, resolver, results, cancel, context.Canceled)
+			// The promise is unresolved when Value gives up, so this is a sanity check. It
+			// cannot catch a Value that returns the stored value with ctx.Err().
 			assert.Equal(t, 0, value, "Value")
 		})
 	})
@@ -449,6 +451,9 @@ func TestFutureValueBlocking(t *testing.T) {
 				tc.trigger(resolver, cancel)
 				synctest.Wait()
 				assertFutureWaitResult(t, resolver, results, cancel, tc.valueErr)
+				// In the Cancel and Deadline cases, the promise is unresolved when Value gives
+				// up, so this is a sanity check. It cannot catch a Value that returns the stored
+				// value with ctx.Err().
 				assert.Equal(t, tc.value, value)
 			})
 		})
@@ -459,21 +464,33 @@ func TestFutureValueBlocking(t *testing.T) {
 // and Result reports only the producer's outcome, even when both are context.Canceled.
 func TestFutureWaitIgnoresProducerError(t *testing.T) {
 	t.Run("ProducerError", func(t *testing.T) {
-		future, resolver := NewPromise[int]()
-		resolver.Resolve(0, errProducer)
-		assert.NoError(t, future.Wait(t.Context()))
-		_, ok, err := future.Result()
-		assert.True(t, ok)
-		assert.ErrorIs(t, err, errProducer)
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			future, resolver := NewPromise[int]()
+			resolver.Resolve(0, errProducer)
+			results := startWait(func() error { return future.Wait(ctx) })
+			synctest.Wait()
+			assertFutureWaitResult(t, resolver, results, cancel, nil)
+			_, ok, err := future.Result()
+			assert.True(t, ok)
+			assert.ErrorIs(t, err, errProducer)
+		})
 	})
 
 	t.Run("ProducerCanceled", func(t *testing.T) {
-		future, resolver := NewPromise[int]()
-		resolver.Resolve(0, context.Canceled)
-		assert.NoError(t, future.Wait(t.Context()), "Wait with a live context")
-		_, ok, err := future.Result()
-		assert.True(t, ok)
-		assert.ErrorIs(t, err, context.Canceled, "Result")
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			future, resolver := NewPromise[int]()
+			resolver.Resolve(0, context.Canceled)
+			results := startWait(func() error { return future.Wait(ctx) })
+			synctest.Wait()
+			assertFutureWaitResult(t, resolver, results, cancel, nil)
+			_, ok, err := future.Result()
+			assert.True(t, ok)
+			assert.ErrorIs(t, err, context.Canceled, "Result")
+		})
 	})
 
 	t.Run("WaitCanceled", func(t *testing.T) {
