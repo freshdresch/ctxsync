@@ -3,7 +3,6 @@ package ctxsync
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -14,14 +13,13 @@ const (
 // promiseState is the state that the Future and the Resolver of one promise share.
 type promiseState[T any] struct {
 	mu sync.Mutex
-	// resolved is read without mu but stored only while holding mu, after value and err are
-	// stored and done is closed. A reader that loads it as true can then read value and err
-	// without mu.
-	resolved atomic.Bool
-	// value and err are written once, under mu, by the winning Resolve, and never change after.
+	// value and err are written once, under mu, by the winning Resolve before it closes done, and
+	// never change after.
 	value T
 	err   error
 	// done is created by NewPromise, so Done never takes mu, and closed by the winning Resolve.
+	// It is the only record that the promise is resolved, so a reader that sees it closed can
+	// read value and err without mu, and every method agrees on whether the promise is resolved.
 	done chan struct{}
 }
 
@@ -101,15 +99,14 @@ func (r Resolver[T]) Resolve(value T, err error) bool {
 	defer state.mu.Unlock()
 	// A losing call must observe the winner under mu, never through a fast path that skips mu,
 	// so the winner's stores happen before any losing call returns.
-	if state.resolved.Load() {
+	if isClosed(state.done) {
 		return false
 	}
+	// Storing value and err before closing done means that a reader that sees done closed also
+	// sees them.
 	state.value = value
 	state.err = err
-	// Closing done before storing resolved means that once IsResolved returns true, done is
-	// already closed. A Wait that decides after that point then reports the resolution.
 	close(state.done)
-	state.resolved.Store(true)
 	return true
 }
 
@@ -124,7 +121,7 @@ func (f Future[T]) Done() <-chan struct{} {
 // IsResolved panics if f is a zero Future. If IsResolved returns true, the [Resolver.Resolve]
 // call that resolved the promise happens before IsResolved returns.
 func (f Future[T]) IsResolved() bool {
-	return f.mustState().resolved.Load()
+	return isClosed(f.mustState().done)
 }
 
 // Result returns the outcome of the promise without waiting. Before the promise is resolved, it
@@ -139,9 +136,9 @@ func (f Future[T]) IsResolved() bool {
 // Result returns.
 func (f Future[T]) Result() (value T, ok bool, err error) {
 	state := f.mustState()
-	// Loading resolved before reading value and err orders those reads after the winning
-	// Resolve stored them.
-	if !state.resolved.Load() {
+	// Checking done before reading value and err orders those reads after the winning Resolve
+	// stored them.
+	if !isClosed(state.done) {
 		var zero T
 		return zero, false, nil
 	}
@@ -165,7 +162,7 @@ func (f Future[T]) Result() (value T, ok bool, err error) {
 func (f Future[T]) Wait(ctx context.Context) error {
 	checkContext(ctx)
 	state := f.mustState()
-	if state.resolved.Load() {
+	if isClosed(state.done) {
 		return nil
 	}
 	return waitClosed(ctx, state.done)

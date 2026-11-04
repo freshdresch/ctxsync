@@ -85,8 +85,9 @@ ready
   primitive across a bubble boundary, whether between two bubbles or between a bubble and code
   outside every bubble. `Event`, `Gate`, `Latch`, `Cond`, and `Barrier` create channels as they
   run, so any use can tie one of them to a bubble. A `Future` is tied to the bubble that ran
-  `NewPromise`, which creates its channel, so resolving it from outside that bubble ends the
-  process.
+  `NewPromise`, which creates its channel. From outside that bubble, a call to `Wait`, `Value`,
+  `IsResolved`, `Result`, or `Resolve`, or any receive from the channel that `Done` returns, ends
+  the process.
 - Using a channel created inside a bubble from outside it ends the process. Blocking inside a
   bubble on a channel created outside it is not durable blocking, so `synctest.Wait` hangs, and a
   leaked goroutine does not fail the bubble.

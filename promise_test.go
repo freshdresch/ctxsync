@@ -408,6 +408,19 @@ var futureTriggers = []futureTrigger{
 	},
 }
 
+// futureQueries is what IsResolved and Result report at one moment.
+type futureQueries struct {
+	resolved bool
+	value    int
+	ok       bool
+	err      error
+}
+
+func queryFuture(future Future[int]) futureQueries {
+	value, ok, err := future.Result()
+	return futureQueries{resolved: future.IsResolved(), value: value, ok: ok, err: err}
+}
+
 // TestFutureWaitBlocking has no case where Resolve and cancellation are both ready. The
 // outcome-wins proof for Future's blocking path is TestWaitClosedOutcomeWins, so Future.Wait must
 // keep waiting through waitClosed.
@@ -418,16 +431,96 @@ func TestFutureWaitBlocking(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), waitTimeout)
 				defer cancel()
 				future, resolver := NewPromise[int]()
-				results := startWait(func() error { return future.Wait(ctx) })
+				// The waiter queries right after Wait returns nil and sends the result before
+				// its Wait result, so the queries are ready once assertFutureWaitResult receives
+				// a nil Wait result.
+				queries := make(chan futureQueries, 1)
+				results := startWait(func() error {
+					err := future.Wait(ctx)
+					if err == nil {
+						queries <- queryFuture(future)
+					}
+					return err
+				})
 				synctest.Wait()
 				require.Empty(t, results, "Wait returned before the trigger")
 
 				tc.trigger(resolver, cancel)
 				synctest.Wait()
 				assertFutureWaitResult(t, resolver, results, cancel, tc.waitErr)
+				if tc.waitErr != nil {
+					return
+				}
+				select {
+				case reported := <-queries:
+					assert.True(t, reported.resolved, "IsResolved right after Wait returned nil")
+					assert.True(t, reported.ok, "Result ok right after Wait returned nil")
+				default:
+					// assertFutureWaitResult already reported that Wait did not return nil.
+				}
 			})
 		})
 	}
+}
+
+// TestFutureQueriesMidResolve holds the promise's mutex and stores an outcome without closing
+// done, which is the middle of a Resolve. The queries run in a separate goroutine, so a query that
+// locks the mutex fails this test instead of deadlocking it. The test runs outside synctest,
+// because a goroutine blocked on a mutex is not durably blocked, so every wait is bounded.
+func TestFutureQueriesMidResolve(t *testing.T) {
+	future, _ := NewPromise[int]()
+	state := future.state
+	state.mu.Lock()
+	unlock := sync.OnceFunc(state.mu.Unlock)
+	defer unlock()
+	state.value = 42
+	state.err = errProducer
+
+	type observation struct {
+		waitErr error
+		queries futureQueries
+	}
+	observe := func(stage string, withWait bool) observation {
+		t.Helper()
+		observations := make(chan observation, 1)
+		go func() {
+			var result observation
+			if withWait {
+				ctx, cancel := context.WithTimeout(t.Context(), boundedWaitTimeout)
+				defer cancel()
+				result.waitErr = future.Wait(ctx)
+			}
+			result.queries = queryFuture(future)
+			observations <- result
+		}()
+		select {
+		case result := <-observations:
+			return result
+		case <-time.After(boundedWaitTimeout):
+			require.FailNow(t, "the queries did not return "+stage)
+			return observation{}
+		}
+	}
+
+	stored := observe("with an outcome stored but done open", false)
+	assert.False(t, stored.queries.resolved, "IsResolved with done open")
+	assert.Zero(t, stored.queries.value, "Result value with done open")
+	assert.False(t, stored.queries.ok, "Result ok with done open")
+	assert.NoError(t, stored.queries.err, "Result error with done open")
+
+	assertOutcome := func(stage string) {
+		t.Helper()
+		closed := observe(stage, true)
+		assert.NoError(t, closed.waitErr, "Wait %s", stage)
+		assert.True(t, closed.queries.resolved, "IsResolved %s", stage)
+		assert.Equal(t, 42, closed.queries.value, "Result value %s", stage)
+		assert.True(t, closed.queries.ok, "Result ok %s", stage)
+		assert.ErrorIs(t, closed.queries.err, errProducer, "Result error %s", stage)
+	}
+	close(state.done)
+	assertOutcome("with done closed under the mutex")
+	unlock()
+	assertOutcome("after the unlock")
 }
 
 func TestFutureValueBlocking(t *testing.T) {

@@ -39,10 +39,12 @@
 // primitive across a bubble boundary, whether between two bubbles or between a bubble and code
 // outside every bubble. Event, Gate, Latch, Cond, and Barrier create channels as they run, so any
 // use can tie one of them to a bubble. A promise is tied to the bubble that ran NewPromise, which
-// creates its channel. Using a channel created inside a bubble from outside it ends the process,
-// so resolving a promise from outside the bubble that created it ends the process. Blocking
-// inside a bubble on a channel created outside it is not durable blocking, so synctest.Wait hangs
-// and a leaked goroutine does not fail the bubble.
+// creates its channel. Using a channel created inside a bubble from outside it ends the process.
+// So from outside the bubble that ran NewPromise, a call to [Future.Wait], [Future.Value],
+// [Future.IsResolved], [Future.Result], or [Resolver.Resolve], or any receive from the channel
+// that [Future.Done] returns, ends the process. Blocking inside a bubble on a channel created
+// outside it is not durable blocking, so synctest.Wait hangs and a leaked goroutine does not fail
+// the bubble.
 package ctxsync
 
 import (
@@ -116,8 +118,9 @@ func NewBarrier(parties int) *Barrier {
 // context.
 //
 // NewPromise creates the promise's channel, so the [testing/synctest] bubble that runs
-// NewPromise is the one the promise belongs to. Resolving a promise from outside the bubble that
-// created it ends the process.
+// NewPromise is the one the promise belongs to. From outside that bubble, a call to [Future.Wait],
+// [Future.Value], [Future.IsResolved], [Future.Result], or [Resolver.Resolve], or any receive from
+// the channel that [Future.Done] returns, ends the process.
 func NewPromise[T any]() (Future[T], Resolver[T]) {
 	state := &promiseState[T]{done: make(chan struct{})}
 	return Future[T]{state: state}, Resolver[T]{state: state}
