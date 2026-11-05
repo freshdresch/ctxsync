@@ -37,7 +37,7 @@ func TestPromiseZeroHandles(t *testing.T) {
 		{name: "Value", method: func() { _, _ = future.Value(t.Context()) }},
 	}
 	for _, tc := range tests {
-		assert.PanicsWithValue(t, "ctxsync: zero Future, use NewPromise", tc.method, tc.name)
+		assert.PanicsWithValue(t, "ctxsync: zero Future, use NewPromise or Go", tc.method, tc.name)
 	}
 }
 

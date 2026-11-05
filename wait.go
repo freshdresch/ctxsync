@@ -4,7 +4,8 @@ import "context"
 
 const nilContextMessage = "ctxsync: nil Context"
 
-// checkContext panics if ctx is nil. Every wait calls it before anything else.
+// checkContext panics if ctx is nil. Every function that takes a context calls it before anything
+// else.
 func checkContext(ctx context.Context) {
 	if ctx == nil {
 		panic(nilContextMessage)

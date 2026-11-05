@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	zeroFutureMessage   = "ctxsync: zero Future, use NewPromise"
+	zeroFutureMessage   = "ctxsync: zero Future, use NewPromise or Go"
 	zeroResolverMessage = "ctxsync: zero Resolver, use NewPromise"
 )
 
@@ -23,8 +23,8 @@ type promiseState[T any] struct {
 	done chan struct{}
 }
 
-// Future is the read end of a promise that [NewPromise] creates. A Future can wait for the
-// promise, but it cannot resolve it.
+// Future is the read end of a promise that [NewPromise] or [Go] creates. A Future can wait for
+// the promise, but it cannot resolve it.
 //
 // The zero Future is not usable, and every method on it panics. A zero Future can only come from
 // a variable or field that was declared but never set, so the panic reports that bug at its
@@ -44,7 +44,8 @@ type Future[T any] struct {
 }
 
 // Resolver is the write end of a promise that [NewPromise] creates. A Resolver can resolve the
-// promise, but it cannot read it.
+// promise, but it cannot read it. [Go] keeps the Resolver of its promise and returns only the
+// Future.
 //
 // The zero Resolver is not usable, and [Resolver.Resolve] on it panics. A zero Resolver can only
 // come from a variable or field that was declared but never set, so the panic reports that bug at
@@ -69,19 +70,9 @@ type Resolver[T any] struct {
 // convention of ignoring the value when the error is non-nil, but the promise does not enforce
 // it.
 //
-// Every path through the producer must call Resolve, including early returns on errors, panics,
-// and [runtime.Goexit], or every wait whose context never ends blocks forever. See [NewPromise]
-// for the recommended pattern. Resolution is final, so call Resolve after all work and cleanup
-// that can fail. Two patterns look right and are not:
-//
-//   - defer r.Resolve(v, err) evaluates v and err when the defer statement runs, so it resolves
-//     with the values they held then, usually the zero value and nil, which reads as success.
-//   - defer func() { r.Resolve(v, err) }() with named results v and err resolves with the real
-//     outcome on a normal return. On a panic or runtime.Goexit, the named results keep whatever
-//     they held, usually the zero value and nil, so waiters see success. Adding a deferred
-//     abandonment call does not fix it, because the closure always calls Resolve. Depending on
-//     the order of the two defers, either the closure wins with a false success on a panic, or
-//     the abandonment call wins on every path.
+// Every path where the producer returns must call Resolve, or every wait whose context never
+// ends blocks forever. Use [Go] instead when the producer may panic or call [runtime.Goexit].
+// Resolution is final, so call Resolve after all work and cleanup that can fail.
 //
 // The Resolve call that returns true happens before any [Future.Wait] call that returns nil
 // returns, before any receive from the channel that [Future.Done] returns completes, before any
@@ -155,7 +146,8 @@ func (f Future[T]) Result() (value T, ok bool, err error) {
 // example, [context.Canceled] calls Wait and then [Future.Result].
 //
 // The end of ctx stops only this wait. It does not reach the producer, which keeps working, and
-// its Resolve still succeeds. A producer that should stop needs its own context.
+// its Resolve still succeeds. A producer that should stop needs its own context. The work of a
+// Future from [Go] is asked to stop only through the context passed to Go.
 //
 // When Wait returns nil, the [Resolver.Resolve] call that resolved the promise happens before
 // Wait returns.
@@ -178,7 +170,8 @@ func (f Future[T]) Wait(ctx context.Context) error {
 // that needs the distinction calls Wait and then [Future.Result].
 //
 // The end of ctx stops only this wait. It does not reach the producer, which keeps working, and
-// its Resolve still succeeds. A producer that should stop needs its own context.
+// its Resolve still succeeds. A producer that should stop needs its own context. The work of a
+// Future from [Go] is asked to stop only through the context passed to Go.
 //
 // When Value returns the stored outcome, the [Resolver.Resolve] call that resolved the promise
 // happens before Value returns.
@@ -198,4 +191,33 @@ func (f Future[T]) mustState() *promiseState[T] {
 		panic(zeroFutureMessage)
 	}
 	return f.state
+}
+
+// run calls work and resolves resolver with its result. It is the body of the goroutine that
+// [Go] starts.
+func run[T any](
+	ctx context.Context,
+	work func(context.Context) (T, error),
+	resolver Resolver[T],
+) {
+	// returned is set only after work returns, so it is false on a panic and on runtime.Goexit.
+	returned := false
+	defer func() {
+		if returned {
+			return
+		}
+		// work did not return. If it panicked, raise the same panic again before resolving, as
+		// sync.WaitGroup.Go does, so no wait observes the resolution before the runtime prints
+		// the panic.
+		if recovered := recover(); recovered != nil {
+			panic(recovered)
+		}
+		// work called runtime.Goexit, or recover returned nil for a panic: one the runtime
+		// discarded, or panic(nil) under GODEBUG=panicnil=1.
+		var zero T
+		resolver.Resolve(zero, ErrGoexit)
+	}()
+	value, err := work(ctx)
+	returned = true
+	resolver.Resolve(value, err)
 }
