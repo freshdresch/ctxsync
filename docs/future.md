@@ -66,9 +66,37 @@ If the profile request fails, `showUser` returns early, and the deferred `cancel
 request to stop. `showUser` does not wait for that request to stop. A caller that needs to wait for
 it calls `Wait` on the orders `Future` after `cancel`.
 
+## Without `Go`
+
+Without `Go`, the same two requests look like this. `get` and the waiting code do not change:
+
+```go
+profile, profileResolver := ctxsync.NewPromise[[]byte]()
+go func() {
+	profileResolver.Resolve(get(ctx, client, baseURL+"/users/42"))
+}()
+
+orders, ordersResolver := ctxsync.NewPromise[[]byte]()
+go func() {
+	ordersResolver.Resolve(get(ctx, client, baseURL+"/users/42/orders"))
+}()
+```
+
+`Go` does the same thing in one call. Use `NewPromise` when the result does not come from one
+function you can hand to `Go`, such as a value that a callback or an existing goroutine delivers.
+
+A producer that uses `NewPromise` must call `Resolve` on every path where it returns. The version
+above misses one path. If `get` calls `runtime.Goexit`, the goroutine exits without calling
+`Resolve`, and every wait whose context never ends blocks forever. A deferred
+`profileResolver.Resolve(nil, errAbandoned)` does not fix this. That deferred call also runs while
+a panic unwinds, so a waiter can wake and end the program before the runtime prints the panic, and
+the panic is never shown. `Go` covers both cases. It raises a panic again before it resolves the
+`Future`, as `sync.WaitGroup.Go` does, and it resolves with `ErrGoexit` when `work` calls
+`runtime.Goexit`.
+
 ## API
 
-| Function or method | Description |
+| Function | Description |
 |---|---|
 | `Go(ctx, work)` | Runs `work(ctx)` in a new goroutine and returns a `Future` that resolves with its result. A panic in `work` ends the program. |
 | `Resolver.Resolve(value, err)` | Stores `value` and `err`, wakes every waiter, and returns true. Only the first call counts. Later calls return false and change nothing. |
@@ -79,12 +107,6 @@ it calls `Wait` on the orders `Future` after `cancel`.
 | `Future.Done()` | Returns a channel that closes once the `Future` is resolved. |
 
 ## Rules
-
-### Resolve on every path
-
-`Go` resolves the `Future` whenever `work` returns or calls `runtime.Goexit`. A producer that uses
-`NewPromise` must call `Resolve` on every path where it returns. If it may panic or call
-`runtime.Goexit`, it should use `Go`.
 
 ### The lifetime of the work
 
