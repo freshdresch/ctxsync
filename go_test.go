@@ -102,7 +102,10 @@ func TestGoResult(t *testing.T) {
 				if tc.err == nil {
 					assert.NoError(t, err)
 				} else {
+					// The Future holds the error exactly as work returned it. ErrorIs alone
+					// would pass if Go wrapped it, so == checks that Go did not.
 					assert.ErrorIs(t, err, tc.err)
+					assert.True(t, err == tc.err, "work's error wrapped: %v", err)
 				}
 			})
 		})

@@ -98,7 +98,7 @@ It raises a panic again before it resolves the `Future`, and it resolves with `E
 
 | Function | Description |
 |---|---|
-| `Go(ctx, work)` | Runs `work(ctx)` in a new goroutine and returns a `Future` that resolves with its result. A panic in `work` ends the program. |
+| `Go(ctx, work)` | Runs `work(ctx)` in a new goroutine and returns a `Future` that resolves with its result. A panic in `work` ends the program, except in two rare runtime cases that [The lifetime of the work](#the-lifetime-of-the-work) describes. |
 | `Resolver.Resolve(value, err)` | Stores `value` and `err`, wakes every waiter, and returns true. Only the first call counts. Later calls return false and change nothing. |
 | `Future.Wait(ctx)` | Blocks until the `Future` is resolved or `ctx` is done. It returns nil if it is resolved, even when `ctx` is done too. It never returns the producer's error. |
 | `Future.Value(ctx)` | Waits as `Wait` does, then returns the stored value and error. If the wait ends first, it returns the zero value and `ctx.Err()`. |
@@ -121,7 +121,10 @@ It raises a panic again before it resolves the `Future`, and it resolves with `E
 - A waiter's own context does not reach the work, unless the caller passes the same context to
   `Go`.
 
-A panic in `work` ends the program, with the exceptions that the `Go` doc names.
+A panic in `work` ends the program, except in two rare cases that come from the Go runtime. If a
+deferred call inside `work` calls `runtime.Goexit` while a panic unwinds, the runtime discards the
+panic. If `work` calls `panic(nil)` in a program that sets `GODEBUG=panicnil=1`, recover returns
+nil. In both cases nothing is printed, and the `Future` holds `ErrGoexit`.
 
 ### Telling a canceled wait from a failed producer
 
