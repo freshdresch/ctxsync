@@ -4,24 +4,18 @@ A `Future` holds a value and an error that one goroutine, the producer, resolves
 goroutines can wait for them with a context. Use it to hand the result of background work to the
 code that needs it.
 
-`NewPromise[T]()` returns an unresolved `Future[T]` and its `Resolver[T]`. Pass the `Future` to the
-code that waits for the result. It can wait and read, but it cannot resolve. The producer keeps the
-`Resolver` and calls `Resolve` when its work is done.
+A `Future` usually comes from `Go`. `Go(ctx, work)` runs `work` in a new goroutine and returns a
+`Future` for the value and error that `work` returns. Pass the `Future` to the code that waits for
+the result. It can wait and read, but it cannot resolve.
+
+`NewPromise[T]()` is for producers that do not fit `Go`. It returns an unresolved `Future[T]` and
+its `Resolver[T]`. The producer keeps the `Resolver` and calls `Resolve` when its work is done.
 
 ## Example
 
 Two HTTP requests run at the same time, and the caller waits for both results:
 
 ```go
-// fetch starts a GET request for url and returns a Future for the response body.
-func fetch(ctx context.Context, client *http.Client, url string) ctxsync.Future[[]byte] {
-	future, resolver := ctxsync.NewPromise[[]byte]()
-	go func() {
-		resolver.Resolve(get(ctx, client, url))
-	}()
-	return future
-}
-
 // get returns the body of a GET request for url.
 func get(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -40,9 +34,17 @@ func get(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 }
 
 func showUser(ctx context.Context, client *http.Client, baseURL string) error {
+	// An early return cancels ctx, which asks the request still running to stop.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// Both requests start now and run at the same time.
-	profile := fetch(ctx, client, baseURL+"/users/42")
-	orders := fetch(ctx, client, baseURL+"/users/42/orders")
+	profile := ctxsync.Go(ctx, func(ctx context.Context) ([]byte, error) {
+		return get(ctx, client, baseURL+"/users/42")
+	})
+	orders := ctxsync.Go(ctx, func(ctx context.Context) ([]byte, error) {
+		return get(ctx, client, baseURL+"/users/42/orders")
+	})
 
 	profileBody, err := profile.Value(ctx)
 	if err != nil {
@@ -57,16 +59,18 @@ func showUser(ctx context.Context, client *http.Client, baseURL string) error {
 }
 ```
 
-`fetch` returns as soon as the request starts, so `showUser` has both requests in flight before it
+`Go` returns without waiting for its request, so `showUser` has both requests in flight before it
 waits for either. Each `Value` call waits for its own request, or returns early if `ctx` ends.
-`get` returns its result on every path, so the one `Resolve` in `fetch` always runs. If the
-producer may run under code that recovers panics, see
-[Resolve on every path](#resolve-on-every-path).
+
+If the profile request fails, `showUser` returns early, and the deferred `cancel` asks the orders
+request to stop. `showUser` does not wait for that request to stop. A caller that needs to wait for
+it calls `Wait` on the orders `Future` after `cancel`.
 
 ## API
 
-| Method | Description |
+| Function or method | Description |
 |---|---|
+| `Go(ctx, work)` | Runs `work(ctx)` in a new goroutine and returns a `Future` that resolves with its result. A panic in `work` ends the program. |
 | `Resolver.Resolve(value, err)` | Stores `value` and `err`, wakes every waiter, and returns true. Only the first call counts. Later calls return false and change nothing. |
 | `Future.Wait(ctx)` | Blocks until the `Future` is resolved or `ctx` is done. It returns nil if it is resolved, even when `ctx` is done too. It never returns the producer's error. |
 | `Future.Value(ctx)` | Waits as `Wait` does, then returns the stored value and error. If the wait ends first, it returns the zero value and `ctx.Err()`. |
@@ -78,35 +82,24 @@ producer may run under code that recovers panics, see
 
 ### Resolve on every path
 
-A `Future` that is never resolved blocks every wait whose context never ends. Every path through
-the producer must call `Resolve`, including early returns, panics, and `runtime.Goexit`.
+`Go` resolves the `Future` whenever `work` returns or calls `runtime.Goexit`. A producer that uses
+`NewPromise` must call `Resolve` on every path where it returns. If it may panic or call
+`runtime.Goexit`, it should use `Go`.
 
-The example's pattern does this. Put the work in a function that returns `(T, error)`. Resolve once
-with its result, and defer an abandonment call in front of it. The first `Resolve` wins, so the
-deferred call does nothing after the real one. Suppose `work` panics and a `recover` in the
-producer goroutine stops the panic, or `work` calls `runtime.Goexit`. Then waiters get the
-abandonment error instead of a false success.
+### The lifetime of the work
 
-Resolution is final, so call `Resolve` after all work and cleanup that can fail. Put that cleanup
-inside `work`. Cleanup deferred in the producer goroutine runs after `Resolve`, and if it fails,
-waiters are left with a success.
+- The goroutine that `Go` starts runs until `work` returns or calls `runtime.Goexit`, even after
+  every waiter has given up. A wait that returns `ctx.Err()` does not stop it.
+- To ask the work to stop, cancel the context passed to `Go`. That works only if `work` honors its
+  context. Canceling does not wait for the work to stop.
+- To wait for the work to finish, wait on its `Future`. Once the `Future` is resolved, `work` has
+  returned or called `runtime.Goexit`, and every deferred call inside `work` has run. The goroutine
+  may still be finishing for a moment after that, but it touches nothing the caller owns. A strict
+  count of goroutines right after a wait can still see it.
+- A waiter's own context does not reach the work, unless the caller passes the same context to
+  `Go`.
 
-Two patterns look right but report success when the producer panics:
-
-- Do not write `defer r.Resolve(v, err)`. It evaluates `v` and `err` when the `defer` statement
-  runs, so it resolves with the values they held then, usually zero and nil.
-- Do not resolve from a deferred closure over named results `v` and `err`:
-
-  ```go
-  func produce(ctx context.Context, r ctxsync.Resolver[int]) (v int, err error) {
-  	defer func() { r.Resolve(v, err) }()
-  	return work(ctx)
-  }
-  ```
-
-  On a normal return, this resolves with the real outcome. On a panic or `runtime.Goexit`, the
-  function never sets its named results. They keep whatever they held, usually zero and nil, so
-  waiters see success.
+A panic in `work` ends the program, with the exceptions that the `Go` doc names.
 
 ### Telling a canceled wait from a failed producer
 
@@ -133,8 +126,10 @@ example right after `Wait` returned nil.
 
 ### The producer does not see your cancellation
 
-When every waiter gives up, the producer keeps working, and its `Resolve` still succeeds. Give the
-producer its own context if it should stop.
+A waiter's cancellation does not reach the producer. When every waiter gives up, the producer keeps
+working, and its `Resolve` still succeeds. With `Go`, the work sees only the context passed to
+`Go`. A caller that wants its own cancellation to stop the work passes the same context to both,
+as the example does.
 
 ### Values are shared, not copied deeply
 
@@ -146,4 +141,4 @@ shares what it points to.
 
 The `Future` and the `Resolver` hold only a pointer. You can copy them, pass them by value, and use
 them as map keys. Two handles of the same kind are equal when they come from the same `NewPromise`
-call. Neither has a usable zero value, and every method on a zero handle panics.
+or `Go` call. Neither has a usable zero value, and every method on a zero handle panics.
