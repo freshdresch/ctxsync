@@ -23,6 +23,27 @@ func valueWithin[T any](t *testing.T, future Future[T]) (T, error) {
 	return future.Value(ctx)
 }
 
+// goFromHelper calls Go(ctx, work) from a helper goroutine and returns the Future. A broken Go
+// that ran work in its caller's goroutine would run a runtime.Goexit in work on that goroutine.
+// On the test's goroutine, that ends the test binary. On the helper, it ends only the helper, and
+// goFromHelper fails the test by name. goFromHelper waits for the helper without a timeout. work
+// must not block, because a broken Go that ran it in the helper would then deadlock the bubble.
+func goFromHelper[T any](
+	ctx context.Context,
+	t *testing.T,
+	work func(ctx context.Context) (T, error),
+) Future[T] {
+	t.Helper()
+	futures := make(chan Future[T], 1)
+	go func() {
+		defer close(futures)
+		futures <- Go(ctx, work)
+	}()
+	future, ok := <-futures
+	require.True(t, ok, "Go did not return to its caller")
+	return future
+}
+
 // TestGoReturnsBeforeWorkFinishes calls Go from a helper goroutine, because a Go that ran work in
 // the caller's goroutine would block the test's goroutine and deadlock the bubble, which ends the
 // test binary. The checks before work is released use assert, because a require would end the
@@ -73,7 +94,7 @@ func TestGoResult(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				future := Go(t.Context(), func(_ context.Context) (int, error) {
+				future := goFromHelper(t.Context(), t, func(_ context.Context) (int, error) {
 					return tc.value, tc.err
 				})
 				value, err := valueWithin(t, future)
@@ -93,7 +114,7 @@ func TestGoDoneContext(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		var received context.Context
-		future := Go(ctx, func(ctx context.Context) (int, error) {
+		future := goFromHelper(ctx, t, func(ctx context.Context) (int, error) {
 			received = ctx
 			return 42, ctx.Err()
 		})
@@ -111,7 +132,7 @@ func TestGoContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.WithValue(t.Context(), goContextKey{}, "passed to Go")
 		var received context.Context
-		future := Go(ctx, func(ctx context.Context) (int, error) {
+		future := goFromHelper(ctx, t, func(ctx context.Context) (int, error) {
 			received = ctx
 			return 0, nil
 		})
@@ -144,7 +165,7 @@ func TestGoGoexit(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				value, err := valueWithin(t, Go(t.Context(), tc.work))
+				value, err := valueWithin(t, goFromHelper(t.Context(), t, tc.work))
 				assert.Equal(t, 0, value)
 				assert.ErrorIs(t, err, ErrGoexit)
 				assert.True(t, err == ErrGoexit, "ErrGoexit wrapped: %v", err)
@@ -236,7 +257,7 @@ func TestGoGoexitDuringPanic(t *testing.T) {
 func TestGoDeferredCallsInWork(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cleaned := false
-		future := Go(t.Context(), func(_ context.Context) (int, error) {
+		future := goFromHelper(t.Context(), t, func(_ context.Context) (int, error) {
 			defer func() { cleaned = true }()
 			return 1, nil
 		})
@@ -276,7 +297,7 @@ func TestGoHappensBefore(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			input := 21
 			var output int
-			future := Go(t.Context(), func(_ context.Context) (int, error) {
+			future := goFromHelper(t.Context(), t, func(_ context.Context) (int, error) {
 				output = input * 2
 				return 0, nil
 			})
@@ -290,7 +311,7 @@ func TestGoHappensBefore(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			input := 21
 			var output int
-			future := Go(t.Context(), func(_ context.Context) (int, error) {
+			future := goFromHelper(t.Context(), t, func(_ context.Context) (int, error) {
 				output = input * 2
 				runtime.Goexit()
 				return 0, nil
