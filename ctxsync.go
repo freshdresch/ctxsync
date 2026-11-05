@@ -62,7 +62,7 @@ var ErrBrokenBarrier = errors.New("ctxsync: barrier broken")
 // ErrGoexit is the error a [Future] from [Go] holds when its work called [runtime.Goexit]. Go
 // stores it unwrapped, so errors.Is and == both match it.
 //
-// The Future also holds ErrGoexit in two cases that come from Go's runtime. In both, recover
+// The Future also holds ErrGoexit in two cases that come from the Go runtime. In both, recover
 // returns nil, so Go cannot tell them from runtime.Goexit, and nothing is printed:
 //
 //   - A deferred call inside work calls runtime.Goexit while a panic unwinds. The runtime ends
@@ -71,8 +71,8 @@ var ErrBrokenBarrier = errors.New("ctxsync: barrier broken")
 //
 // Calling t.FailNow, or testify's require functions, inside work is misuse, because the testing
 // package allows them only on the goroutine running the test. They end work through
-// runtime.Goexit, so the Future holds ErrGoexit. Tests use testify's assert functions inside work
-// instead.
+// runtime.Goexit, so the Future usually holds ErrGoexit. Tests should use testify's assert
+// functions inside work instead.
 var ErrGoexit = errors.New("ctxsync: work called runtime.Goexit")
 
 // NewLatch returns a [Latch] whose count starts at count. It panics if count is negative, because
@@ -124,11 +124,11 @@ func NewPromise[T any]() (Future[T], Resolver[T]) {
 
 // Go runs work in a new goroutine and returns a [Future] for its result. A panic in work ends the
 // program, and Go does not resolve the Future before it does, so no wait observes the resolution
-// before the runtime prints the panic. Go handles a panic as [sync.WaitGroup.Go] does.
+// before the runtime prints the panic.
 //
 // When work returns, Go resolves the Future with the value and error that work returned. When
 // work calls [runtime.Goexit], Go resolves it with the zero value and [ErrGoexit]. The doc of
-// ErrGoexit names two cases from Go's runtime where a panic in work prints nothing and the Future
+// ErrGoexit names two cases from the Go runtime where a panic in work prints nothing and the Future
 // also holds ErrGoexit. The guarantee covers observing the resolution, not every way a wait can
 // return. Work's own deferred calls run during the panic, so one that ends a context or signals a
 // primitive that a waiter uses can release that waiter before the panic is printed, including a
@@ -145,9 +145,9 @@ func NewPromise[T any]() (Future[T], Resolver[T]) {
 // waiter's own context does not reach the work, unless the caller passes the same context to Go.
 //
 // To wait for the work to finish, wait on the Future. Once the Future is resolved, work has
-// returned or called runtime.Goexit, and every deferred call inside work has run. The goroutine
-// may still be finishing for a moment after that, but it touches nothing the caller owns. A
-// strict count of goroutines right after a wait can still see it.
+// ended, and every deferred call inside work has run. The goroutine may still be finishing for a
+// moment after that, but it touches nothing the caller owns. A strict count of goroutines right
+// after a wait can still see it.
 //
 // Everything the caller did before it called Go happens before work starts. Everything work did
 // before it returned or called runtime.Goexit, including its deferred calls, happens before any
@@ -164,6 +164,6 @@ func Go[T any](ctx context.Context, work func(ctx context.Context) (T, error)) F
 		panic("ctxsync: nil work")
 	}
 	future, resolver := NewPromise[T]()
-	go run(ctx, work, resolver)
+	go runWork(ctx, work, resolver)
 	return future
 }

@@ -88,10 +88,10 @@ and `Go`.
 
 ### Goroutines
 
-Only `Go` starts a goroutine. It runs until its work returns or calls `runtime.Goexit`, even after
-every waiter gives up. Cancel the context passed to `Go` to ask it to stop, and wait on its `Future`
-to know it finished. No other function starts a goroutine. A panic in its work ends the program,
-with the exceptions that the `Go` doc names.
+Only `Go` starts a goroutine. That goroutine runs until the `work` passed to `Go` returns or calls
+`runtime.Goexit`, even after every waiter gives up. Cancel the context passed to `Go` to ask it to
+stop, and wait on the `Future` that `Go` returns to know it finished. A panic in `work` ends the
+program, with the exceptions that the `Go` doc names.
 
 ### Tests
 

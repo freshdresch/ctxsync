@@ -193,9 +193,9 @@ func (f Future[T]) mustState() *promiseState[T] {
 	return f.state
 }
 
-// run calls work and resolves resolver with its result. It is the body of the goroutine that
+// runWork calls work and resolves resolver with its result. It is the body of the goroutine that
 // [Go] starts.
-func run[T any](
+func runWork[T any](
 	ctx context.Context,
 	work func(context.Context) (T, error),
 	resolver Resolver[T],

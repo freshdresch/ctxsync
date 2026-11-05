@@ -88,11 +88,11 @@ function you can hand to `Go`, such as a value that a callback or an existing go
 A producer that uses `NewPromise` must call `Resolve` on every path where it returns. The version
 above misses one path. If `get` calls `runtime.Goexit`, the goroutine exits without calling
 `Resolve`, and every wait whose context never ends blocks forever. A deferred
-`profileResolver.Resolve(nil, errAbandoned)` does not fix this. That deferred call also runs while
-a panic unwinds, so a waiter can wake and end the program before the runtime prints the panic, and
-the panic is never shown. `Go` covers both cases. It raises a panic again before it resolves the
-`Future`, as `sync.WaitGroup.Go` does, and it resolves with `ErrGoexit` when `work` calls
-`runtime.Goexit`.
+`profileResolver.Resolve(nil, errAbandoned)`, where `errAbandoned` is an error you define, closes
+that gap but causes another: it also runs while a panic unwinds, so a waiter can wake and end the
+program before the runtime prints the panic, and the panic is never shown. `Go` covers both cases.
+It raises a panic again before it resolves the `Future`, and it resolves with `ErrGoexit` when
+`work` calls `runtime.Goexit`.
 
 ## API
 
@@ -115,9 +115,9 @@ the panic is never shown. `Go` covers both cases. It raises a panic again before
 - To ask the work to stop, cancel the context passed to `Go`. That works only if `work` honors its
   context. Canceling does not wait for the work to stop.
 - To wait for the work to finish, wait on its `Future`. Once the `Future` is resolved, `work` has
-  returned or called `runtime.Goexit`, and every deferred call inside `work` has run. The goroutine
-  may still be finishing for a moment after that, but it touches nothing the caller owns. A strict
-  count of goroutines right after a wait can still see it.
+  ended, and every deferred call inside `work` has run. The goroutine may still be finishing for a
+  moment after that, but it touches nothing the caller owns. A strict count of goroutines right
+  after a wait can still see it.
 - A waiter's own context does not reach the work, unless the caller passes the same context to
   `Go`.
 

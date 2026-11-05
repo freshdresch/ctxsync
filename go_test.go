@@ -174,17 +174,17 @@ func TestGoGoexit(t *testing.T) {
 	}
 }
 
-// panicValue is the panic value of the tests that call run directly. It is a pointer to a struct
-// of non-zero size, so assert.Same tells it apart from any other value.
+// panicValue is the panic value of the tests that call runWork directly. It is a pointer to a
+// struct of non-zero size, so assert.Same tells it apart from any other value.
 type panicValue struct {
 	text string
 }
 
-// runRecovered calls run with work in a goroutine of its own, under a deferred recover that stops
-// a panic that run raises again, so the test binary keeps running. It waits up to
+// runWorkRecovered calls runWork with work in a goroutine of its own, under a deferred recover
+// that stops a panic that runWork raises again, so the test binary keeps running. It waits up to
 // boundedWaitTimeout for that goroutine to end and returns the Future, what recover returned,
 // and whether the goroutine ended. It runs outside synctest, so the wait is bounded in real time.
-func runRecovered(
+func runWorkRecovered(
 	ctx context.Context,
 	work func(ctx context.Context) (int, error),
 ) (future Future[int], recovered any, ended bool) {
@@ -196,7 +196,7 @@ func runRecovered(
 	go func() {
 		defer close(finished)
 		defer func() { panicked = recover() }()
-		run(ctx, work, resolver)
+		runWork(ctx, work, resolver)
 	}()
 	select {
 	case <-finished:
@@ -206,9 +206,9 @@ func runRecovered(
 	}
 }
 
-// TestGoRunReraisesPanic calls run directly, because a panic that run raises again in the
-// goroutine that Go starts ends the test binary.
-func TestGoRunReraisesPanic(t *testing.T) {
+// TestGoRunWorkReraisesPanic calls runWork directly, because a panic that runWork raises again
+// in the goroutine that Go starts ends the test binary.
+func TestGoRunWorkReraisesPanic(t *testing.T) {
 	sentinel := &panicValue{text: "work panicked"}
 	tests := []struct {
 		name string
@@ -231,23 +231,23 @@ func TestGoRunReraisesPanic(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			future, recovered, ended := runRecovered(t.Context(), tc.work)
-			require.True(t, ended, "run did not end")
-			assert.Same(t, sentinel, recovered, "the panic that run raised again")
+			future, recovered, ended := runWorkRecovered(t.Context(), tc.work)
+			require.True(t, ended, "runWork did not end")
+			assert.Same(t, sentinel, recovered, "the panic that runWork raised again")
 			assert.False(t, future.IsResolved(), "Future resolved on a panic")
 		})
 	}
 }
 
-// TestGoGoexitDuringPanic calls run directly, so the test binary keeps running even if run lets
-// the discarded panic escape.
+// TestGoGoexitDuringPanic calls runWork directly, so the test binary keeps running even if
+// runWork lets the discarded panic escape.
 func TestGoGoexitDuringPanic(t *testing.T) {
-	future, recovered, ended := runRecovered(t.Context(), func(_ context.Context) (int, error) {
+	future, recovered, ended := runWorkRecovered(t.Context(), func(_ context.Context) (int, error) {
 		defer runtime.Goexit()
 		panic(&panicValue{text: "discarded by runtime.Goexit"})
 	})
-	require.True(t, ended, "run did not end")
-	assert.Nil(t, recovered, "a panic escaped run")
+	require.True(t, ended, "runWork did not end")
+	assert.Nil(t, recovered, "a panic escaped runWork")
 	value, ok, err := future.Result()
 	assert.True(t, ok, "Future not resolved")
 	assert.Equal(t, 0, value)
@@ -267,6 +267,9 @@ func TestGoDeferredCallsInWork(t *testing.T) {
 	})
 }
 
+// TestGoArguments relies on Go checking for nil work in the caller. If Go lost that check, the
+// nil call would panic inside the goroutine Go starts, which no test can recover, so this test
+// would fail by name but the test binary would then end.
 func TestGoArguments(t *testing.T) {
 	var nilContext context.Context
 	var nilWork func(ctx context.Context) (int, error)
@@ -291,7 +294,9 @@ func TestGoArguments(t *testing.T) {
 }
 
 // TestGoHappensBefore passes plain ints between the caller and work, so the race detector reports
-// an access that Go does not order.
+// an access that Go does not order. The caller-to-work edge is checked through a chain: the test
+// goroutine starts goFromHelper's helper goroutine, which calls Go, which runs work. Any correct
+// Go must order that chain through its go statement.
 func TestGoHappensBefore(t *testing.T) {
 	t.Run("Return", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
