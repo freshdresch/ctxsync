@@ -2,6 +2,8 @@ package ctxsync
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -240,6 +242,60 @@ func TestGoRunWorkReraisesPanic(t *testing.T) {
 			assert.False(t, future.IsResolved(), "Future resolved on a panic")
 		})
 	}
+}
+
+// goPanicChildEnv gates TestGoPanicEndsProgramChild. TestGoPanicEndsProgram sets it to "1" in the
+// one child process it starts.
+const goPanicChildEnv = "CTXSYNC_GO_PANIC_CHILD"
+
+// goPanicSentinel is the panic value of the child process, so the parent can find it in the output.
+const goPanicSentinel = "ctxsync-go-panic-sentinel"
+
+// TestGoPanicEndsProgram and TestGoPanicEndsProgramChild check that Go itself, not only runWork,
+// lets a panic in work end the program. A panic in the goroutine that Go starts ends the test
+// binary, so the parent runs the check in a child process: the same test binary, running only the
+// child test. The child does nothing unless goPanicChildEnv is "1", and the parent skips when it
+// is, so a child never starts another child.
+func TestGoPanicEndsProgram(t *testing.T) {
+	if os.Getenv(goPanicChildEnv) == "1" {
+		t.Skip("a child process never starts another child")
+	}
+	if testing.Short() {
+		t.Skip("starts a child process")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(
+		ctx,
+		os.Args[0],
+		"-test.run=^TestGoPanicEndsProgramChild$",
+		"-test.count=1",
+	)
+	cmd.Env = append(os.Environ(), goPanicChildEnv+"=1")
+	output, err := cmd.CombinedOutput()
+
+	require.NoError(t, ctx.Err(), "child process timed out, output:\n%s", output)
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, "child process output:\n%s", output)
+	assert.NotZero(t, exitErr.ExitCode(), "child process exit code, output:\n%s", output)
+	assert.Contains(t, string(output), goPanicSentinel, "child process output")
+	assert.Contains(t, string(output), "[recovered, repanicked]", "child process output")
+}
+
+// TestGoPanicEndsProgramChild is the child process of TestGoPanicEndsProgram. The panic in work
+// should end the process while the test waits on the Future.
+func TestGoPanicEndsProgramChild(t *testing.T) {
+	if os.Getenv(goPanicChildEnv) != "1" {
+		t.Skip("helper for TestGoPanicEndsProgram")
+	}
+	future := Go(t.Context(), func(_ context.Context) (int, error) {
+		panic(goPanicSentinel)
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err := future.Value(ctx)
+	t.Fatalf("Value returned %v before the panic in work ended the program", err)
 }
 
 // TestGoGoexitDuringPanic calls runWork directly, so the test binary keeps running even if
