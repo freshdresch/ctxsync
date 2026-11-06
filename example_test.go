@@ -2,8 +2,10 @@ package ctxsync_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 
@@ -171,9 +173,9 @@ func ExampleBarrier() {
 }
 
 func ExampleNewPromise() {
-	errAbandoned := errors.New("producer abandoned the promise")
 	// work returns its result through its return values, so every path through it reaches the
-	// single Resolve below.
+	// single Resolve below. A producer that may panic or call runtime.Goexit should use Go
+	// instead.
 	work := func(ctx context.Context) (int, error) {
 		if err := ctx.Err(); err != nil {
 			return 0, err
@@ -184,9 +186,6 @@ func ExampleNewPromise() {
 	ctx := context.Background()
 	future, resolver := ctxsync.NewPromise[int]()
 	go func() {
-		// If work panics or calls runtime.Goexit, this call resolves the promise. Otherwise
-		// the Resolve below wins, and this call does nothing.
-		defer resolver.Resolve(0, errAbandoned)
 		resolver.Resolve(work(ctx))
 	}()
 
@@ -197,6 +196,70 @@ func ExampleNewPromise() {
 	}
 	fmt.Println(value)
 	// Output: 42
+}
+
+func ExampleGo() {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/users/42":
+			_, _ = io.WriteString(w, "Ada")
+		case "/users/42/orders":
+			_, _ = io.WriteString(w, "3 orders")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	// get returns the body of a GET request for url.
+	get := func(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, err
+		}
+		// The body is only read, so an error from Close reports nothing the caller can act on.
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("get %q: status %d", url, response.StatusCode)
+		}
+		return io.ReadAll(response.Body)
+	}
+
+	showUser := func(ctx context.Context, client *http.Client, baseURL string) error {
+		// An early return cancels ctx, which asks the request still running to stop.
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		// Both requests start now and run at the same time.
+		profile := ctxsync.Go(ctx, func(ctx context.Context) ([]byte, error) {
+			return get(ctx, client, baseURL+"/users/42")
+		})
+		orders := ctxsync.Go(ctx, func(ctx context.Context) ([]byte, error) {
+			return get(ctx, client, baseURL+"/users/42/orders")
+		})
+
+		profileBody, err := profile.Value(ctx)
+		if err != nil {
+			return fmt.Errorf("profile: %w", err)
+		}
+		ordersBody, err := orders.Value(ctx)
+		if err != nil {
+			return fmt.Errorf("orders: %w", err)
+		}
+		fmt.Printf("profile: %s\norders: %s\n", profileBody, ordersBody)
+		return nil
+	}
+
+	if err := showUser(context.Background(), server.Client(), server.URL); err != nil {
+		fmt.Println(err)
+	}
+	// Output:
+	// profile: Ada
+	// orders: 3 orders
 }
 
 func ExampleFuture_Wait() {

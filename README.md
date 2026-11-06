@@ -17,7 +17,7 @@ go get github.com/freshdresch/ctxsync
 | [`Latch`](docs/latch.md) | Waiting until a fixed number of things have finished. | `sync.WaitGroup` |
 | [`Cond`](docs/cond.md) | Waiting for a condition on state that a mutex protects. | `sync.Cond` |
 | [`Barrier`](docs/barrier.md) | A fixed number of goroutines that wait for each other, round after round. | None |
-| [`Future`](docs/future.md) | A value and an error that one goroutine produces and others wait for. | A value plus a channel you close once |
+| [`Future`](docs/future.md) | A value and an error that one goroutine produces and others wait for. `Go` runs work in a goroutine and returns a `Future` for its result. | A value plus a channel you close once |
 
 ## Example
 
@@ -69,6 +69,8 @@ Each type's page has an example, and versions of them run as tests in
 - Every method is safe for concurrent use. `Cond.Wait` also needs its caller to hold `Cond.L`.
 - Whatever a goroutine wrote before it set, opened, counted down, or resolved something is visible
   to every goroutine whose wait then returns nil.
+- Whatever the work passed to `Go` wrote before it returned is visible to every goroutine whose wait
+  on its `Future` then returns nil.
 - Whatever a `Barrier` party wrote before it arrived is visible to every party whose `Await` of
   that generation returns nil.
 - Whatever a goroutine wrote before it called `Signal` or `Broadcast` is visible to a waiter that
@@ -81,11 +83,15 @@ Each type's page has an example, and versions of them run as tests in
 
 `Event` and `Gate` work as zero values. A zero `Cond` works once you set its `L`. The zero `Latch`
 is already open, so create a `Latch` with `NewLatch`. `Await` on a zero `Barrier` panics, and so
-does every method on a zero `Future` or `Resolver`. Create them with `NewBarrier` and `NewPromise`.
+does every method on a zero `Future` or `Resolver`. Create them with `NewBarrier`, `NewPromise`,
+and `Go`.
 
-### No hidden goroutines
+### Goroutines
 
-No method starts a goroutine, so a wait that returns leaves nothing running.
+Only `Go` starts a goroutine. That goroutine runs until the `work` passed to `Go` returns or calls
+`runtime.Goexit`, even after every waiter gives up. Cancel the context passed to `Go` to ask it to
+stop, and wait on the `Future` that `Go` returns to know it finished. A panic in `work` ends the
+program, with the exceptions that the `Go` doc names.
 
 ### Tests
 

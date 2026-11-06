@@ -11,9 +11,9 @@ between two bubbles or between a bubble and code outside every bubble.
 `Event`, `Gate`, `Latch`, `Cond`, and `Barrier` create channels as they run, so any use can tie one
 of them to a bubble.
 
-A `Future` belongs to the bubble that called `NewPromise`. From outside that bubble, calling `Wait`,
-`Value`, `IsResolved`, `Result`, or `Resolve`, or receiving from the channel that `Done` returns,
-ends the process.
+A `Future` belongs to the bubble that called `NewPromise` or `Go`. From outside that bubble,
+calling `Wait`, `Value`, `IsResolved`, `Result`, or `Resolve`, or receiving from the channel that
+`Done` returns, ends the process.
 
 Using a channel created inside a bubble from outside it ends the process. Blocking inside a bubble
 on a channel created outside it does not count as durably blocked. In that case, `synctest.Wait`

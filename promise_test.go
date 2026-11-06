@@ -37,7 +37,7 @@ func TestPromiseZeroHandles(t *testing.T) {
 		{name: "Value", method: func() { _, _ = future.Value(t.Context()) }},
 	}
 	for _, tc := range tests {
-		assert.PanicsWithValue(t, "ctxsync: zero Future, use NewPromise", tc.method, tc.name)
+		assert.PanicsWithValue(t, "ctxsync: zero Future, use NewPromise or Go", tc.method, tc.name)
 	}
 }
 
@@ -176,117 +176,6 @@ func TestResolverConcurrent(t *testing.T) {
 			require.True(t, observed.polled, "%s: timed out", where)
 			assert.Equal(t, winner, observed.value, where)
 			assert.ErrorIs(t, observed.err, resolverErrors[winner], where)
-		}
-	}
-}
-
-// runRecommendedProducer resolves a new promise with the pattern that the doc comment of
-// NewPromise recommends, in a producer goroutine whose deferred recover stops a panic in work,
-// as errgroup-style wrappers do. It waits for the producer goroutine to end and returns the
-// Future and the value that recover returned.
-func runRecommendedProducer(
-	ctx context.Context,
-	work func(ctx context.Context) (int, error),
-) (Future[int], any) {
-	future, resolver := NewPromise[int]()
-	var recovered any
-	finished := make(chan struct{})
-	go func() {
-		defer close(finished)
-		defer func() { recovered = recover() }()
-		defer resolver.Resolve(0, errAbandoned)
-		resolver.Resolve(work(ctx))
-	}()
-	<-finished
-	return future, recovered
-}
-
-// TestPromiseRecommendedProducer checks the pattern that the docs and ExampleNewPromise teach.
-// It mostly exercises Go's defer rules and first-wins.
-func TestPromiseRecommendedProducer(t *testing.T) {
-	errEarly := errors.New("early return")
-	tests := []struct {
-		name          string
-		work          func(ctx context.Context) (int, error)
-		expectedValue int
-		expectedErr   error
-		expectedPanic any
-	}{
-		{
-			name: "Success",
-			work: func(_ context.Context) (int, error) {
-				return 42, nil
-			},
-			expectedValue: 42,
-		},
-		{
-			name: "EarlyReturn",
-			work: func(ctx context.Context) (int, error) {
-				if ctx.Err() == nil {
-					return 7, errEarly
-				}
-				return 42, nil
-			},
-			expectedValue: 7,
-			expectedErr:   errEarly,
-		},
-		{
-			name: "Panic",
-			work: func(_ context.Context) (int, error) {
-				panic("work panicked")
-			},
-			expectedErr:   errAbandoned,
-			expectedPanic: "work panicked",
-		},
-		{
-			name: "Goexit",
-			work: func(_ context.Context) (int, error) {
-				runtime.Goexit()
-				return 42, nil
-			},
-			expectedErr: errAbandoned,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			future, recovered := runRecommendedProducer(t.Context(), tc.work)
-			assert.Equal(t, tc.expectedPanic, recovered, "recovered panic")
-			value, ok, err := future.Result()
-			require.True(t, ok, "promise not resolved after the producer ended")
-			assert.Equal(t, tc.expectedValue, value)
-			if tc.expectedErr == nil {
-				assert.NoError(t, err)
-			} else {
-				assert.ErrorIs(t, err, tc.expectedErr)
-			}
-		})
-	}
-}
-
-// TestPromisePerPathProducer checks the form for producers that cannot be split: a deferred
-// abandonment call and an explicit Resolve on each normal path.
-func TestPromisePerPathProducer(t *testing.T) {
-	for _, forgetToResolve := range []bool{false, true} {
-		future, resolver := NewPromise[int]()
-		finished := make(chan struct{})
-		go func() {
-			defer close(finished)
-			defer resolver.Resolve(0, errAbandoned)
-			if forgetToResolve {
-				return
-			}
-			resolver.Resolve(1, nil)
-		}()
-		<-finished
-
-		value, ok, err := future.Result()
-		require.True(t, ok, "forgetToResolve %t: promise not resolved", forgetToResolve)
-		if forgetToResolve {
-			assert.Equal(t, 0, value)
-			assert.ErrorIs(t, err, errAbandoned)
-		} else {
-			assert.Equal(t, 1, value)
-			assert.NoError(t, err)
 		}
 	}
 }
